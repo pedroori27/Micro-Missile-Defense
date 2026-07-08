@@ -24,28 +24,32 @@ while True:
     for result in results:
         for box in result.boxes:
 
-            # Classe detectada
+            # Número da classe
             classe = int(box.cls[0])
 
-            # Apenas pessoas (classe 0 no COCO)
-            if classe == 0:
+            # Nome da classe caso queira alguma especifica, por exemplo, "pessoa" ou "carro", você pode usar o nome da classe para filtrar as detecções
+            name = model.names[classe]
 
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
+            # Coordenadas
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                confianca = float(box.conf[0])
+            # Confiança
+            trust = float(box.conf[0])
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2),
-                              (0, 255, 0), 2)
+            # Desenha o retângulo
+            cv2.rectangle(frame, (x1, y1), (x2, y2),
+                        (0, 255, 0), 2)
 
-                cv2.putText(
-                    frame,
-                    f"Pessoa x({(x2+x1)/2:.0f}) y({(y2-y1)/2:.0f}) {confianca:.2f}",
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2
-                )
+            # Escreve o nome da classe
+            cv2.putText(
+                frame,
+                f"{name} x({(x2+x1)/2:.0f}) y({(y2+y1)/2:.0f}) {trust:.2f}",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2
+            )
 
     cv2.imshow("Detecção de Pessoas", frame)
 
