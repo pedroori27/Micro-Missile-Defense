@@ -1,110 +1,254 @@
 import cv2
 import math
 import serial
+import serial.tools.list_ports
+import time
+
 from ultralytics import YOLO
 
-# Variaveis globais
+# CONFIGURAÇÕES
 
 CONFIANCA_MINIMA = 0.70
+
+# Ângulo central do servo
 ANGULO_CENTRO_SERVO = 90
 
-# Tem que ser o mesmo valor da câmera.
-FOV_HORIZONTAL = 90 
+# FOV horizontal que tem a câmera
+FOV_HORIZONTAL = 90
 
-# Inicialização da câmera, arduino e modelo YOLO
+# CÂMERA
 
 def iniciar_camera():
 
-    camera = cv2.VideoCapture(
-        "/dev/video1",
-        cv2.CAP_V4L2
-    )
+    print("Procurando câmera...")
 
-    camera.set(
-        cv2.CAP_PROP_FOURCC,
-        cv2.VideoWriter_fourcc(*"MJPG")
-    )
+    # Tenta algumas portas de câmera
+    for indice in range(10):
 
-    camera.set(
-        cv2.CAP_PROP_FRAME_WIDTH,
-        1920
-    )
+        print(f"Tentando câmera {indice}...")
 
-    camera.set(
-        cv2.CAP_PROP_FRAME_HEIGHT,
-        1080
-    )
+        # Windows / Linux
+        camera = cv2.VideoCapture(indice)
 
-    camera.set(
-        cv2.CAP_PROP_FPS,
-        30
-    )
+        if not camera.isOpened():
+            camera.release()
+            continue
 
-    if not camera.isOpened():
-        print("Erro: não foi possível abrir a DV20.")
-        return None
+        # Tenta configurar a câmera
+        camera.set(
+            cv2.CAP_PROP_FOURCC,
+            cv2.VideoWriter_fourcc(*"MJPG")
+        )
 
-    print("DV20 aberta com sucesso!")
+        camera.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            1920
+        )
 
-    return camera
+        camera.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            1080
+        )
 
+        camera.set(
+            cv2.CAP_PROP_FPS,
+            30
+        )
+
+        # Testa se realmente consegue receber uma imagem
+        ret, frame = camera.read()
+
+        if not ret:
+            camera.release()
+            continue
+
+        largura = int(
+            camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+        )
+
+        altura = int(
+            camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        )
+
+        fps = camera.get(
+            cv2.CAP_PROP_FPS
+        )
+
+        print("Câmera encontrada!")
+        print(f"Índice: {indice}")
+        print(f"Resolução: {largura}x{altura}")
+        print(f"FPS: {fps:.0f}")
+
+        return camera
+
+    print("Nenhuma câmera encontrada.")
+
+    return None
+
+# ARDUINO
 
 def iniciar_arduino():
-    arduino = serial.Serial("/dev/ttyACM0", 9600)
 
-    return arduino
+    print("Procurando Arduino...")
 
+    portas = serial.tools.list_ports.comports()
+
+    if not portas:
+
+        print("Nenhuma porta serial encontrada.")
+
+        return None
+
+    for porta in portas:
+
+        descricao = (
+            porta.description or ""
+        ).lower()
+
+        fabricante = (
+            porta.manufacturer or ""
+        ).lower()
+
+        print(
+            f"{porta.device} - "
+            f"{porta.description}"
+        )
+
+        # Procura por nomes comuns de Arduino
+        if (
+            "arduino" in descricao
+            or "arduino" in fabricante
+            or "usb serial" in descricao
+            or "ch340" in descricao
+            or "ch340" in fabricante
+            or "wch" in descricao
+            or "wch" in fabricante
+        ):
+
+            try:
+
+                arduino = serial.Serial(
+                    porta.device,
+                    9600,
+                    timeout=1
+                )
+
+                # O Arduino normalmente reinicia
+                # quando a porta serial é aberta
+                time.sleep(2)
+
+                print(
+                    f"Arduino encontrado em: "
+                    f"{porta.device}"
+                )
+
+                return arduino
+
+            except serial.SerialException as erro:
+
+                print(
+                    f"Erro ao abrir {porta.device}: "
+                    f"{erro}"
+                )
+
+    print("Arduino não encontrado.")
+
+    return None
+
+# YOLO
 
 def iniciar_modelo():
-    return YOLO("yolov8n.pt")
+
+    print("Carregando YOLO...")
+
+    modelo = YOLO("yolov8n.pt")
+
+    print("YOLO carregado.")
+
+    return modelo
+
+# CÁLCULO DA DISTÂNCIA FOCAL
+
+def calcular_distancia_focal(largura):
+
+    distancia_focal = (
+        (largura / 2)
+        /
+        math.tan(
+            math.radians(
+                FOV_HORIZONTAL / 2
+            )
+        )
+    )
+
+    return distancia_focal
 
 # CÁLCULO DO ÂNGULO
 
-def calcular_distancia_focal(largura):
-    f = (largura / 2) / math.tan(
-        math.radians(FOV_HORIZONTAL / 2)
-    )
-
-    return f
-
-
-def calcular_angulo(centro_x, largura, distancia_focal):
+def calcular_angulo(
+    centro_x,
+    largura,
+    distancia_focal
+):
 
     centro_camera = largura / 2
 
     angulo = math.degrees(
         math.atan(
-            (centro_x - centro_camera) / distancia_focal
+            (
+                centro_x
+                -
+                centro_camera
+            )
+            /
+            distancia_focal
         )
     )
 
     return angulo
 
+# ÂNGULO DO SERVO
+
 def calcular_angulo_servo(angulo):
 
-    angulo_servo = ANGULO_CENTRO_SERVO + angulo
+    angulo_servo = (
+        ANGULO_CENTRO_SERVO
+        +
+        angulo
+    )
 
     # Limita entre 0 e 180
     angulo_servo = max(
         0,
-        min(180, angulo_servo)
+        min(
+            180,
+            angulo_servo
+        )
     )
 
     return angulo_servo
 
-# ARDUINO
+# ENVIO PARA O ARDUINO
 
-def enviar_servo(arduino, angulo_servo):
+def enviar_servo(
+    arduino,
+    angulo_servo
+):
 
-    comando = f"{angulo_servo:.0f}\n"
+    comando = (
+        f"{angulo_servo:.0f}\n"
+    )
 
     arduino.write(
         comando.encode()
     )
 
-# YOLO, segue a pessoa
+# DETECÇÃO DA PESSOA
 
-def detectar_pessoa(modelo, frame):
+def detectar_pessoa(
+    modelo,
+    frame
+):
 
     resultados = modelo(frame)
 
@@ -114,14 +258,19 @@ def detectar_pessoa(modelo, frame):
 
         for box in resultado.boxes:
 
-            classe = int(box.cls[0])
-            confianca = float(box.conf[0])
+            classe = int(
+                box.cls[0]
+            )
+
+            confianca = float(
+                box.conf[0]
+            )
 
             # Classe 0 = pessoa
             if classe != 0:
                 continue
 
-            # Ignora detecções com baixa confiança
+            # Ignora baixa confiança
             if confianca < CONFIANCA_MINIMA:
                 continue
 
@@ -130,16 +279,25 @@ def detectar_pessoa(modelo, frame):
                 box.xyxy[0]
             )
 
-            centro_x = (x1 + x2) / 2
-            centro_y = (y1 + y2) / 2
+            centro_x = (
+                x1 + x2
+            ) / 2
+
+            centro_y = (
+                y1 + y2
+            ) / 2
 
             deteccao = {
+
                 "x1": x1,
                 "y1": y1,
+
                 "x2": x2,
                 "y2": y2,
+
                 "centro_x": centro_x,
                 "centro_y": centro_y,
+
                 "confianca": confianca
             }
 
@@ -147,7 +305,7 @@ def detectar_pessoa(modelo, frame):
 
     return deteccao
 
-# Quadrado na tela do YOLO, dando a informação do ângulo, ângulo do servo e confiança da detecção.
+# DESENHA A DETECÇÃO
 
 def desenhar_deteccao(
     frame,
@@ -158,8 +316,12 @@ def desenhar_deteccao(
 
     x1 = deteccao["x1"]
     y1 = deteccao["y1"]
+
     x2 = deteccao["x2"]
     y2 = deteccao["y2"]
+
+    centro_x = deteccao["centro_x"]
+    centro_y = deteccao["centro_y"]
 
     confianca = deteccao["confianca"]
 
@@ -169,6 +331,33 @@ def desenhar_deteccao(
         (x1, y1),
         (x2, y2),
         (0, 255, 0),
+        2
+    )
+
+    # Centro da pessoa
+    cv2.circle(
+        frame,
+        (
+            int(centro_x),
+            int(centro_y)
+        ),
+        5,
+        (0, 0, 255),
+        -1
+    )
+
+    # Centro da câmera
+    altura, largura = frame.shape[:2]
+
+    centro_camera = int(
+        largura / 2
+    )
+
+    cv2.line(
+        frame,
+        (centro_camera, 0),
+        (centro_camera, altura),
+        (255, 0, 0),
         2
     )
 
@@ -183,59 +372,106 @@ def desenhar_deteccao(
     cv2.putText(
         frame,
         texto,
-        (x1, y1 - 10),
+        (x1, max(y1 - 10, 30)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 0),
         2
     )
 
-# Programa principal
+# PROGRAMA PRINCIPAL
 
 def main():
+    # Inicialização
 
     camera = iniciar_camera()
 
+    if camera is None:
+
+        print(
+            "Não foi possível iniciar a câmera."
+        )
+
+        return
+
     arduino = iniciar_arduino()
 
+    if arduino is None:
+
+        print(
+            "Não foi possível conectar ao Arduino."
+        )
+
+        camera.release()
+
+        return
+
     modelo = iniciar_modelo()
+
+    # Loop principal
 
     while True:
 
         ret, frame = camera.read()
 
         if not ret:
-            print("Não foi possível obter imagem da câmera.")
+
+            print(
+                "Não foi possível obter "
+                "imagem da câmera."
+            )
+
             break
 
-        altura, largura = frame.shape[:2]
+        # Dimensões reais do frame
 
-        distancia_focal = calcular_distancia_focal(
-            largura
+        altura, largura = (
+            frame.shape[:2]
         )
+
+        # Distância focal
+
+        distancia_focal = (
+            calcular_distancia_focal(
+                largura
+            )
+        )
+
+        # YOLO
 
         deteccao = detectar_pessoa(
             modelo,
             frame
         )
 
+        # Se encontrou uma pessoa
+
         if deteccao is not None:
 
+            # Calcula ângulo da pessoa
             angulo = calcular_angulo(
                 deteccao["centro_x"],
                 largura,
                 distancia_focal
             )
 
-            angulo_servo = calcular_angulo_servo(
-                angulo
+
+            # Converte para ângulo do servo
+            angulo_servo = (
+                calcular_angulo_servo(
+                    angulo
+                )
             )
 
+
+            # Envia para Arduino
             enviar_servo(
                 arduino,
                 angulo_servo
             )
 
+
+            # Desenha informações
             desenhar_deteccao(
                 frame,
                 deteccao,
@@ -243,18 +479,37 @@ def main():
                 angulo_servo
             )
 
+
+        # Mostra câmera
+
         cv2.imshow(
             "Camera",
             frame
         )
 
+
         # Q para sair
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        if (
+            cv2.waitKey(1)
+            &
+            0xFF
+            ==
+            ord("q")
+        ):
+
             break
 
+    # Encerramento
+   
     camera.release()
+
     arduino.close()
+
     cv2.destroyAllWindows()
 
-if __name__ == "__main__": # Codigo so roda se for chamado por esse arquivo, nunca se for importado por outro arquivo
+
+# EXECUÇÃO
+
+if __name__ == "__main__":
+
     main()
