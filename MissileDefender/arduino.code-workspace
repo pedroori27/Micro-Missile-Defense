@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "arduino",
+			"path": ".."
+		},
+		{
+			"name": "MissileDefender",
+			"path": "."
+		}
+	],
+	"settings": {}
+}

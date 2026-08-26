@@ -1,10 +1,9 @@
 import cv2
 import math
 import serial
+from ultralytics import YOLO
 import serial.tools.list_ports
 import time
-
-from ultralytics import YOLO
 
 # CONFIGURAÇÕES
 
@@ -154,7 +153,6 @@ def iniciar_arduino():
     print("Arduino não encontrado.")
 
     return None
-
 # YOLO
 
 def iniciar_modelo():
@@ -185,7 +183,7 @@ def calcular_distancia_focal(largura):
 
 # CÁLCULO DO ÂNGULO
 
-def calcular_angulo(
+def calcular_angulo_x(
     centro_x,
     largura,
     distancia_focal
@@ -193,7 +191,7 @@ def calcular_angulo(
 
     centro_camera = largura / 2
 
-    angulo = math.degrees(
+    angulo_x = math.degrees(
         math.atan(
             (
                 centro_x
@@ -205,38 +203,82 @@ def calcular_angulo(
         )
     )
 
-    return angulo
+    return angulo_x
 
 # ÂNGULO DO SERVO
 
-def calcular_angulo_servo(angulo):
+def calcular_angulo_servo_x(angulo_x):
 
-    angulo_servo = (
+    angulo_servo_x = (
         ANGULO_CENTRO_SERVO
         +
-        angulo
+        angulo_x
     )
 
     # Limita entre 0 e 180
-    angulo_servo = max(
+    angulo_servo_x = max(
         0,
         min(
             180,
-            angulo_servo
+            angulo_servo_x
         )
     )
 
-    return angulo_servo
+    return angulo_servo_x
+
+def calcular_angulo_y(
+    centro_y,
+    altura,
+    distancia_focal
+):
+
+    centro_camera = altura / 2
+
+    angulo_y = math.degrees(
+        math.atan(
+            (
+                centro_y
+                -
+                centro_camera
+            )
+            /
+            distancia_focal
+        )
+    )
+
+    return angulo_y
+
+# ÂNGULO DO SERVO
+
+def calcular_angulo_servo_y(angulo_y):
+
+    angulo_servo_y = (
+        ANGULO_CENTRO_SERVO
+        +
+        angulo_y
+    )
+
+    # Limita entre 0 e 180
+    angulo_servo_y = max(
+        0,
+        min(
+            180,
+            angulo_servo_y
+        )
+    )
+
+    return angulo_servo_y
 
 # ENVIO PARA O ARDUINO
 
 def enviar_servo(
     arduino,
-    angulo_servo
+    angulo_servo_x,
+    angulo_servo_y
 ):
 
     comando = (
-        f"{angulo_servo:.0f}\n"
+        f"{angulo_servo_x:.0f},{angulo_servo_y:.0f}\n"
     )
 
     arduino.write(
@@ -310,8 +352,10 @@ def detectar_pessoa(
 def desenhar_deteccao(
     frame,
     deteccao,
-    angulo,
-    angulo_servo
+    angulo_x,
+    angulo_servo_x,
+    angulo_y,
+    angulo_servo_y
 ):
 
     x1 = deteccao["x1"]
@@ -364,8 +408,10 @@ def desenhar_deteccao(
     # Texto
     texto = (
         f"Pessoa | "
-        f"Angulo: {angulo:+.1f} | "
-        f"Servo: {angulo_servo:.0f} | "
+        f"Angulo X: {angulo_x:+.1f} | "
+        f"Servo X: {angulo_servo_x:.0f} | "
+        f"Angulo Y: {angulo_y:+.1f} | "
+        f"Servo Y: {angulo_servo_y:.0f} | "
         f"Conf: {confianca:.2f}"
     )
 
@@ -449,17 +495,28 @@ def main():
         if deteccao is not None:
 
             # Calcula ângulo da pessoa
-            angulo = calcular_angulo(
+            angulo_x = calcular_angulo_x(
                 deteccao["centro_x"],
                 largura,
                 distancia_focal
             )
 
-
             # Converte para ângulo do servo
-            angulo_servo = (
-                calcular_angulo_servo(
-                    angulo
+            angulo_servo_x = (
+                calcular_angulo_servo_x(
+                    angulo_x
+                )
+            )
+
+            angulo_y = calcular_angulo_y(
+                deteccao["centro_y"],
+                altura,
+                distancia_focal
+            )
+
+            angulo_servo_y = (
+                calcular_angulo_servo_y(
+                    angulo_y
                 )
             )
 
@@ -467,7 +524,8 @@ def main():
             # Envia para Arduino
             enviar_servo(
                 arduino,
-                angulo_servo
+                angulo_servo_x,
+                angulo_servo_y
             )
 
 
@@ -475,8 +533,10 @@ def main():
             desenhar_deteccao(
                 frame,
                 deteccao,
-                angulo,
-                angulo_servo
+                angulo_x,
+                angulo_servo_x,
+                angulo_y,
+                angulo_servo_y
             )
 
 

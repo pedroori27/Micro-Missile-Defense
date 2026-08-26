@@ -1,12 +1,18 @@
 #include <Arduino.h>
 #include <Servo.h>
 
-Servo servo;
+Servo servox;
+Servo servoy;
 
-const int PINO_SERVO = 9;
+const int PINO_SERVOX = 9;
+const int PINO_SERVOY = 10;
+
+int valorX = 0;
+int valorY = 0;
 
 // Último ângulo enviado ao servo
-int ultimoAngulo = 90;
+int ultimoAnguloX = 90;
+int ultimoAnguloY = 90;
 
 // Diferença mínima necessária para movimentar
 const int ZONA_MORTA = 2;
@@ -14,37 +20,51 @@ const int ZONA_MORTA = 2;
 void setup() {
     Serial.begin(9600);
 
-    servo.attach(PINO_SERVO);
+    servox.attach(PINO_SERVOX);
+
+    servoy.attach(PINO_SERVOY);
 
     // Começa no centro
-    servo.write(ultimoAngulo);
+    servox.write(90);
+    servoy.write(90);
 }
 
 void loop() {
-
     if (Serial.available() > 0) {
+        String entrada = Serial.readStringUntil('\n');  // lê até o '\n'
+
+        int virgula = entrada.indexOf(',');             // acha a vírgula
+        valorX = entrada.substring(0, virgula).toInt();
+        valorY = entrada.substring(virgula + 1).toInt();
 
         // Recebe o ângulo enviado pelo Python
-        int novoAngulo = Serial.parseInt();
+        int novoAnguloX = valorX;
+        int novoAnguloY = valorY;
 
         // Garante que fique entre 0 e 180
-        novoAngulo = constrain(novoAngulo, 0, 180);
+        novoAnguloX = constrain(novoAnguloX, 0, 180);
+        novoAnguloY = constrain(novoAnguloY, 0, 180);
 
         // Calcula a diferença em relação ao último ângulo
-        int diferenca = abs(novoAngulo - ultimoAngulo);
+        int diferencaX = abs(novoAnguloX - ultimoAnguloX);
+        int diferencaY = abs(novoAnguloY - ultimoAnguloY);
 
         // Só movimenta se a diferença for >= 2°
-        if (diferenca >= ZONA_MORTA) {
+        if (diferencaX >= ZONA_MORTA || diferencaY >= ZONA_MORTA) {
 
             // Move o servo
-            servo.write(novoAngulo);
+            servox.write(novoAnguloX);
+            servoy.write(novoAnguloY);
 
             // Guarda o novo ângulo
-            ultimoAngulo = novoAngulo;
+            ultimoAnguloX = novoAnguloX;
+            ultimoAnguloY = novoAnguloY;
 
             // Informa o ângulo pelo Serial
-            Serial.print("Servo: ");
-            Serial.println(novoAngulo);
+            Serial.print("Servo X: ");
+            Serial.println(novoAnguloX);
+            Serial.print("Servo Y: ");
+            Serial.println(novoAnguloY);
         }
     }
 }
