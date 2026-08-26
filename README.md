@@ -1,8 +1,8 @@
-Micro Missile Defense
+# Micro Missile Defense
 
 Sistema de rastreamento automático de pessoas em tempo real, que usa visão computacional (YOLOv8) para detectar uma pessoa na imagem da câmera e movimenta dois servos motores (eixos X e Y) via Arduino, mantendo o alvo centralizado no campo de visão.
 
-Como funciona
+## Como funciona
 A câmera captura vídeo em tempo real.
 O modelo YOLOv8 detecta pessoas em cada frame.
 O programa calcula o deslocamento do centro da pessoa detectada em relação ao centro da imagem.
@@ -10,8 +10,10 @@ Esse deslocamento é convertido em ângulos horizontal (X) e vertical (Y), consi
 Os ângulos calculados são enviados ao Arduino via porta serial.
 O Arduino movimenta os servos motores (pan/tilt) para apontar na direção da pessoa detectada.
 O vídeo é exibido com bounding box, centro da detecção, linha central da câmera e informações de ângulo/confiança sobrepostas.
-Requisitos
-Hardware
+
+## Requisitos
+
+Hardware:
 Arduino (qualquer modelo compatível com comunicação serial, ex: Uno, Nano, Mega)
 2 servos motores (pan/tilt — eixo X e eixo Y)
 Webcam ou câmera USB
@@ -25,7 +27,7 @@ Servo Y (tilt)	10
 
 💡 Se os dois servos consumirem mais corrente do que o pino 5V do Arduino aguenta, use uma fonte externa de 5V para os servos (com o GND compartilhado com o Arduino).
 
-Software
+Software:
 Python 3.8+
 Bibliotecas Python:
 opencv-python
@@ -33,14 +35,12 @@ ultralytics (YOLOv8)
 pyserial
 PlatformIO (extensão do VS Code ou CLI) para compilar e gravar o firmware do Arduino
 Biblioteca Servo (já inclusa no core do Arduino)
-Instalação
-Clone o repositório:
-bash
-   git clone https://github.com/pedroori27/Micro-Missile-Defense.git
-   cd Micro-Missile-Defense
-Instale as dependências:
+
+## Instale as dependências:
+
 bash
    pip install opencv-python ultralytics pyserial
+
 O modelo yolov8n.pt é baixado automaticamente pela biblioteca ultralytics na primeira execução. Caso prefira baixar manualmente, ele está disponível nos releases oficiais do Ultralytics — coloque o arquivo na pasta do projeto.
 Grave o firmware no Arduino usando o PlatformIO:
 bash
@@ -49,7 +49,7 @@ bash
 
 O código-fonte (src/main.cpp) está descrito na seção Firmware abaixo. Ele escuta a porta serial em 9600 baud, recebe comandos no formato "anguloX,anguloY\n" (ex.: "95,88\n") e move os servos X e Y de acordo.
 
-Configuração
+## Configuração
 
 Antes de executar, ajuste as constantes no início do script conforme o seu setup:
 
@@ -60,9 +60,7 @@ FOV_HORIZONTAL	Campo de visão horizontal da câmera, em graus	90
 Porta serial (dentro de iniciar_arduino)	Porta de conexão com o Arduino	"COM5"
 ZONA_MORTA (no firmware, main.cpp)	Diferença mínima (em graus) para o servo se mover — evita jitter	2
 
-⚠️ Importante: ajuste "COM5" para a porta correta do seu Arduino. No Windows, verifique no Gerenciador de Dispositivos; no Linux/Mac normalmente é algo como /dev/ttyUSB0 ou /dev/ttyACM0.
-
-Uso
+## Uso
 
 Execute o script principal:
 
@@ -175,13 +173,14 @@ Zona morta	Só aciona os servos se a variação for ≥ ZONA_MORTA (2°), evitan
 servox.write() / servoy.write()	Move os servos para o novo ângulo
 Serial.print(...)	Envia de volta o ângulo aplicado, para depuração no monitor serial
 Estrutura de pastas sugerida
-Micro-Missile-Defense/
-├── main.py                 # Script Python (câmera, YOLO, cálculo de ângulos)
-└── firmware/                # Projeto PlatformIO do Arduino
-    ├── platformio.ini
-    └── src/
-        └── main.cpp          # Firmware que recebe os ângulos e move os servos
 
-Aviso
+   Micro-Missile-Defense/
+   ├── main.py                 # Script Python (câmera, YOLO, cálculo de ângulos)
+   └── firmware/                # Projeto PlatformIO do Arduino
+       ├── platformio.ini
+       └── src/
+           └── main.cpp          # Firmware que recebe os ângulos e move os servos
+
+## Aviso
 
 Este projeto tem finalidade educacional, voltado ao estudo de visão computacional, integração serial com Arduino e controle de servo motores (pan/tilt tracking). Não deve ser adaptado para uso com dispositivos que possam causar dano a pessoas ou animais.
