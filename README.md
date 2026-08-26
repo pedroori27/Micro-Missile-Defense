@@ -1,4 +1,4 @@
-# Micro Missile Defense 🎯
+# Micro Missile Defense 
 
 Sistema de rastreamento automático de pessoas em tempo real, que usa visão computacional (YOLOv8) para detectar uma pessoa na imagem da câmera e movimenta dois servos motores (eixos X e Y) via Arduino, mantendo o alvo centralizado no campo de visão.
 
