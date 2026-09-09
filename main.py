@@ -7,13 +7,31 @@ import time
 
 # CONFIGURAÇÕES
 
-CONFIANCA_MINIMA = 0.70
+CONFIANCA_MINIMA = 0.40
 
 # Ângulo central do servo
 ANGULO_CENTRO_SERVO = 90
 
 # FOV horizontal que tem a câmera
 FOV_HORIZONTAL = 90
+
+# Classe alvo para detecção
+CLASSE_ALVO = ["celular"]
+
+estrategia_prioridade = "B"  # A, B ou C
+
+# Classes disponíveis (YOLO COCO dataset)
+CLASSES_DISPONIVEIS = {
+    "pessoa":   0,
+    "celular":  67,
+    "livro":    73,
+    "bola":     32,
+    "garrafa":  39,
+    "cadeira":  56,
+    "laptop":   63,
+    "mochila":  24,
+    "copo":     41,
+}
 
 # CÂMERA
 
@@ -87,81 +105,29 @@ def iniciar_camera():
 # ARDUINO
 
 def iniciar_arduino():
-
-    print("Procurando Arduino...")
-
-    portas = serial.tools.list_ports.comports()
-
-    if not portas:
-
-        print("Nenhuma porta serial encontrada.")
-
-        return None
-
-    for porta in portas:
-
-        descricao = (
-            porta.description or ""
-        ).lower()
-
-        fabricante = (
-            porta.manufacturer or ""
-        ).lower()
-
-        print(
-            f"{porta.device} - "
-            f"{porta.description}"
+    try:
+        arduino = serial.Serial(
+            port="COM5",
+            baudrate=9600,
+            timeout=1
         )
 
-        # Procura por nomes comuns de Arduino
-        if (
-            "arduino" in descricao
-            or "arduino" in fabricante
-            or "usb serial" in descricao
-            or "ch340" in descricao
-            or "ch340" in fabricante
-            or "wch" in descricao
-            or "wch" in fabricante
-        ):
+        time.sleep(2)
+        return arduino
 
-            try:
-
-                arduino = serial.Serial(
-                    porta.device,
-                    9600,
-                    timeout=1
-                )
-
-                # O Arduino normalmente reinicia
-                # quando a porta serial é aberta
-                time.sleep(2)
-
-                print(
-                    f"Arduino encontrado em: "
-                    f"{porta.device}"
-                )
-
-                return arduino
-
-            except serial.SerialException as erro:
-
-                print(
-                    f"Erro ao abrir {porta.device}: "
-                    f"{erro}"
-                )
-
-    print("Arduino não encontrado.")
-
-    return None
+    except Exception as e:
+        print("Erro ao conectar ao Arduino:")
+        print(e)
+        return None
 # YOLO
 
 def iniciar_modelo():
 
     print("Carregando YOLO...")
 
-    modelo = YOLO("yolov8n.pt")
+    modelo = YOLO("yolo11s.pt")
 
-    print("YOLO carregado.")
+    print("a carregado.")
 
     return modelo
 
@@ -287,146 +253,95 @@ def enviar_servo(
 
 # DETECÇÃO DA PESSOA
 
-def detectar_pessoa(
+def detectar_objeto(
     modelo,
     frame
 ):
+    # Pega os IDs de todas as classes configuradas
+    ids_alvo = {
+        nome: CLASSES_DISPONIVEIS[nome]
+        for nome in CLASSE_ALVO
+        if nome in CLASSES_DISPONIVEIS
+    }
 
     resultados = modelo(frame)
-
-    deteccao = None
+    deteccoes = []  # ← agora é uma lista, não um único objeto
 
     for resultado in resultados:
-
         for box in resultado.boxes:
 
-            classe = int(
-                box.cls[0]
-            )
+            classe = int(box.cls[0])
+            confianca = float(box.conf[0])
 
-            confianca = float(
-                box.conf[0]
+            # Ignora se não está na lista de alvos
+            nome_classe = next(
+                (nome for nome, id_ in ids_alvo.items() if id_ == classe),
+                None
             )
-
-            # Classe 0 = pessoa
-            if classe != 0:
+            if nome_classe is None:
                 continue
 
-            # Ignora baixa confiança
             if confianca < CONFIANCA_MINIMA:
                 continue
 
-            x1, y1, x2, y2 = map(
-                int,
-                box.xyxy[0]
-            )
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-            centro_x = (
-                x1 + x2
-            ) / 2
-
-            centro_y = (
-                y1 + y2
-            ) / 2
-
-            deteccao = {
-
-                "x1": x1,
-                "y1": y1,
-
-                "x2": x2,
-                "y2": y2,
-
-                "centro_x": centro_x,
-                "centro_y": centro_y,
-
+            deteccoes.append({
+                "classe": nome_classe,   # ← agora guarda o nome do objeto
+                "x1": x1, "y1": y1,
+                "x2": x2, "y2": y2,
+                "centro_x": (x1 + x2) / 2,
+                "centro_y": (y1 + y2) / 2,
                 "confianca": confianca
-            }
+            })
 
-            break
-
-    return deteccao
-
+    return deteccoes
 # DESENHA A DETECÇÃO
 
-def desenhar_deteccao(
-    frame,
-    deteccao,
-    angulo_x,
-    angulo_servo_x,
-    angulo_y,
-    angulo_servo_y
-):
+def desenhar_deteccoes(frame, deteccoes, distancia_focal):
 
-    x1 = deteccao["x1"]
-    y1 = deteccao["y1"]
-
-    x2 = deteccao["x2"]
-    y2 = deteccao["y2"]
-
-    centro_x = deteccao["centro_x"]
-    centro_y = deteccao["centro_y"]
-
-    confianca = deteccao["confianca"]
-
-    # Bounding box
-    cv2.rectangle(
-        frame,
-        (x1, y1),
-        (x2, y2),
-        (0, 255, 0),
-        2
-    )
-
-    # Centro da pessoa
-    cv2.circle(
-        frame,
-        (
-            int(centro_x),
-            int(centro_y)
-        ),
-        5,
-        (0, 0, 255),
-        -1
-    )
-
-    # Centro da câmera
     altura, largura = frame.shape[:2]
 
-    centro_camera = int(
-        largura / 2
-    )
+    # Linha central da câmera
+    cv2.line(frame, (largura // 2, 0), (largura // 2, altura), (255, 0, 0), 1)
 
-    cv2.line(
-        frame,
-        (centro_camera, 0),
-        (centro_camera, altura),
-        (255, 0, 0),
-        2
-    )
+    for det in deteccoes:
 
-    # Texto
-    texto = (
-        f"Pessoa | "
-        f"Angulo X: {angulo_x:+.1f} | "
-        f"Servo X: {angulo_servo_x:.0f} | "
-        f"Angulo Y: {angulo_y:+.1f} | "
-        f"Servo Y: {angulo_servo_y:.0f} | "
-        f"Conf: {confianca:.2f}"
-    )
+        x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
+        centro_x, centro_y = det["centro_x"], det["centro_y"]
 
-    cv2.putText(
-        frame,
-        texto,
-        (x1, max(y1 - 10, 30)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (0, 255, 0),
-        2
-    )
+        angulo_x = calcular_angulo_x(centro_x, largura, distancia_focal)
+        angulo_y = calcular_angulo_y(centro_y, altura, distancia_focal)
+
+        # Cor diferente por classe
+        CORES = {
+            "pessoa":  (0, 255, 0),
+            "celular": (0, 200, 255),
+            "bola":    (255, 100, 0),
+            "livro":   (180, 0, 255),
+        }
+        cor = CORES.get(det["classe"], (200, 200, 200))
+
+        # Bounding box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
+
+        # Centro do objeto
+        cv2.circle(frame, (int(centro_x), int(centro_y)), 5, (0, 0, 255), -1)
+
+        # Texto com classe + ângulos
+        texto = (
+            f"{det['classe']} | "
+            f"X: {angulo_x:+.1f} | "
+            f"Y: {angulo_y:+.1f} | "
+            f"Conf: {det['confianca']:.2f}"
+        )
+        cv2.putText(
+            frame, texto,
+            (x1, max(y1 - 10, 20)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor, 2
+        )
 
 # PROGRAMA PRINCIPAL
-
 def main():
     # Inicialização
 
@@ -457,110 +372,46 @@ def main():
     # Loop principal
 
     while True:
-
         ret, frame = camera.read()
-
         if not ret:
-
-            print(
-                "Não foi possível obter "
-                "imagem da câmera."
-            )
-
             break
 
-        # Dimensões reais do frame
+        altura, largura = frame.shape[:2]
+        distancia_focal = calcular_distancia_focal(largura)
 
-        altura, largura = (
-            frame.shape[:2]
-        )
+        deteccoes = detectar_objeto(modelo, frame)  # lista agora
 
-        # Distância focal
+        if deteccoes:
+            # ESTRATÉGIA DE PRIORIDADE
+            if estrategia_prioridade == "A":
+                # Opção A: segue o primeiro da lista CLASSE_ALVO que aparecer
+                ordem = {nome: i for i, nome in enumerate(CLASSE_ALVO)}
+                alvo = min(deteccoes, key=lambda d: ordem.get(d["classe"], 99))
+            elif estrategia_prioridade == "B":
+                # Opção B: segue o objeto mais central na tela
+                alvo = min(deteccoes, key=lambda d: abs(d["centro_x"] - largura / 2))
+            elif estrategia_prioridade == "C":
+                # Opção C: segue o maior objeto (maior área)
+                alvo = max(deteccoes, key=lambda d: (d["x2"]-d["x1"]) * (d["y2"]-d["y1"]))
+            else:
+                alvo = deteccoes[0]  # fallback 
 
-        distancia_focal = (
-            calcular_distancia_focal(
-                largura
+            angulo_servo_x = calcular_angulo_servo_x(
+                calcular_angulo_x(alvo["centro_x"], largura, distancia_focal)
             )
-        )
-
-        # YOLO
-
-        deteccao = detectar_pessoa(
-            modelo,
-            frame
-        )
-
-        # Se encontrou uma pessoa
-
-        if deteccao is not None:
-
-            # Calcula ângulo da pessoa
-            angulo_x = calcular_angulo_x(
-                deteccao["centro_x"],
-                largura,
-                distancia_focal
+            angulo_servo_y = calcular_angulo_servo_y(
+                calcular_angulo_y(alvo["centro_y"], altura, distancia_focal)
             )
 
-            # Converte para ângulo do servo
-            angulo_servo_x = (
-                calcular_angulo_servo_x(
-                    angulo_x
-                )
-            )
+            enviar_servo(arduino, angulo_servo_x, angulo_servo_y)
+            desenhar_deteccoes(frame, deteccoes, distancia_focal)  # desenha todos
 
-            angulo_y = calcular_angulo_y(
-                deteccao["centro_y"],
-                altura,
-                distancia_focal
-            )
-
-            angulo_servo_y = (
-                calcular_angulo_servo_y(
-                    angulo_y
-                )
-            )
-
-
-            # Envia para Arduino
-            enviar_servo(
-                arduino,
-                angulo_servo_x,
-                angulo_servo_y
-            )
-
-
-            # Desenha informações
-            desenhar_deteccao(
-                frame,
-                deteccao,
-                angulo_x,
-                angulo_servo_x,
-                angulo_y,
-                angulo_servo_y
-            )
-
-
-        # Mostra câmera
-
-        cv2.imshow(
-            "Camera",
-            frame
-        )
-
-
-        # Q para sair
-        if (
-            cv2.waitKey(1)
-            &
-            0xFF
-            ==
-            ord("q")
-        ):
-
+        cv2.imshow("Camera", frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    # Encerramento
-   
+        # Encerramento
+    
     camera.release()
 
     arduino.close()
