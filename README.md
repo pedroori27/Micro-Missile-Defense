@@ -5,7 +5,7 @@ Sistema de rastreamento automático de pessoas em tempo real, que usa visão com
 ## Como funciona
 
 1. A câmera captura vídeo em tempo real.
-2. O modelo **YOLOv8** detecta pessoas em cada frame.
+2. O modelo **YOLOv11s** detecta pessoas ou objetos em cada frame.
 3. O programa calcula o deslocamento do centro da pessoa detectada em relação ao centro da imagem.
 4. Esse deslocamento é convertido em ângulos horizontal (X) e vertical (Y), considerando o campo de visão (FOV) da câmera.
 5. Os ângulos calculados são enviados ao Arduino via porta serial.
