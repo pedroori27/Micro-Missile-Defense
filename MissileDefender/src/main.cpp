@@ -3,68 +3,93 @@
 
 Servo servox;
 Servo servoy;
+Servo servo_gatilho;
 
-const int PINO_SERVOX = 9;
-const int PINO_SERVOY = 10;
+const int PINO_SERVOX   = 9;
+const int PINO_SERVOY   = 10;
+const int PINO_GATILHO  = 11;
+const int PINO_BOTAO    = 7;   // ← botão de recarga (GND + pino 7)
 
-int valorX = 0;
-int valorY = 0;
+const int ANGULO_REPOUSO  = 0;
+const int ANGULO_ACIONADO = 90;
+const int DURACAO_GATILHO = 600;
+const int ZONA_MORTA      = 2;
+const int DEBOUNCE_MS     = 50;
 
-// Último ângulo enviado ao servo
 int ultimoAnguloX = 90;
 int ultimoAnguloY = 90;
 
-// Diferença mínima necessária para movimentar
-const int ZONA_MORTA = 2;
+bool           gatilho_ativo   = false;
+unsigned long  tempo_gatilho   = 0;
+
+bool           botao_anterior  = HIGH;
+unsigned long  tempo_debounce  = 0;
 
 void setup() {
     Serial.begin(9600);
 
     servox.attach(PINO_SERVOX);
-
     servoy.attach(PINO_SERVOY);
+    servo_gatilho.attach(PINO_GATILHO);
 
-    // Começa no centro
+    pinMode(PINO_BOTAO, INPUT_PULLUP);  // botão entre pino 7 e GND
+
     servox.write(90);
     servoy.write(90);
+    servo_gatilho.write(ANGULO_REPOUSO);
 }
 
 void loop() {
+
+    // ── Botão de recarga (com debounce) ──────────────────────
+    bool botao_atual = digitalRead(PINO_BOTAO);
+
+    if (botao_atual == LOW &&
+        botao_anterior == HIGH &&
+        (millis() - tempo_debounce > DEBOUNCE_MS))
+    {
+        Serial.println("RECARGA");   // Python recebe e libera o sistema
+        tempo_debounce = millis();
+    }
+    botao_anterior = botao_atual;
+
+    // ── Retorno automático do gatilho ────────────────────────
+    if (gatilho_ativo && (millis() - tempo_gatilho >= DURACAO_GATILHO)) {
+        servo_gatilho.write(ANGULO_REPOUSO);
+        gatilho_ativo = false;
+    }
+
+    // ── Leitura serial (Python → Arduino) ───────────────────
     if (Serial.available() > 0) {
-        String entrada = Serial.readStringUntil('\n');  // lê até o '\n'
+        String entrada = Serial.readStringUntil('\n');
 
-        int virgula = entrada.indexOf(',');             // acha a vírgula
-        valorX = entrada.substring(0, virgula).toInt();
-        valorY = entrada.substring(virgula + 1).toInt();
+        // Formato: "X,Y,GATILHO\n"
+        int virgula1 = entrada.indexOf(',');
+        int virgula2 = entrada.indexOf(',', virgula1 + 1);
 
-        // Recebe o ângulo enviado pelo Python
-        int novoAnguloX = valorX;
-        int novoAnguloY = valorY;
+        int novoAnguloX = entrada.substring(0, virgula1).toInt();
+        int novoAnguloY = entrada.substring(virgula1 + 1, virgula2).toInt();
+        int gatilho     = entrada.substring(virgula2 + 1).toInt();
 
-        // Garante que fique entre 0 e 180
         novoAnguloX = constrain(novoAnguloX, 0, 180);
         novoAnguloY = constrain(novoAnguloY, 0, 180);
 
-        // Calcula a diferença em relação ao último ângulo
-        int diferencaX = abs(novoAnguloX - ultimoAnguloX);
-        int diferencaY = abs(novoAnguloY - ultimoAnguloY);
-
-        // Só movimenta se a diferença for >= 2°
-        if (diferencaX >= ZONA_MORTA || diferencaY >= ZONA_MORTA) {
-
-            // Move o servo
+        // Move os servos de mira
+        if (abs(novoAnguloX - ultimoAnguloX) >= ZONA_MORTA ||
+            abs(novoAnguloY - ultimoAnguloY) >= ZONA_MORTA)
+        {
             servox.write(novoAnguloX);
             servoy.write(novoAnguloY);
-
-            // Guarda o novo ângulo
             ultimoAnguloX = novoAnguloX;
             ultimoAnguloY = novoAnguloY;
+        }
 
-            // Informa o ângulo pelo Serial
-            Serial.print("Servo X: ");
-            Serial.println(novoAnguloX);
-            Serial.print("Servo Y: ");
-            Serial.println(novoAnguloY);
+        // Aciona o gatilho
+        if (gatilho == 1 && !gatilho_ativo) {
+            servo_gatilho.write(ANGULO_ACIONADO);
+            gatilho_ativo = true;
+            tempo_gatilho = millis();
+            Serial.println("DISPARO");
         }
     }
 }
