@@ -15,10 +15,16 @@ ANGULO_CENTRO_SERVO = 90
 # FOV horizontal que tem a câmera
 FOV_HORIZONTAL = 90
 
+# Atirar com o servo
+TOLERANCIA_MIRA = 60    # pixels do centro para considerar "na mira"
+TEMPO_MIRA       = 2.5  # segundos até acionar o servo gatilho
+COOLDOWN_GATILHO  = 10  # segundos de espera entre disparos
+MAX_USOS_GATILHO  = 2   # usos antes de exigir recarga
+
 # Classe alvo para detecção
 CLASSE_ALVO = ["celular"]
 
-estrategia_prioridade = "B"  # A, B ou C
+ESTRATEGIA_PRIORIDADE = "B"  # A, B ou C
 
 # Classes disponíveis (YOLO COCO dataset)
 CLASSES_DISPONIVEIS = {
@@ -105,20 +111,73 @@ def iniciar_camera():
 # ARDUINO
 
 def iniciar_arduino():
-    try:
-        arduino = serial.Serial(
-            port="COM5",
-            baudrate=9600,
-            timeout=1
+
+    print("Procurando Arduino...")
+
+    portas = serial.tools.list_ports.comports()
+
+    if not portas:
+
+        print("Nenhuma porta serial encontrada.")
+
+        return None
+
+    for porta in portas:
+
+        descricao = (
+            porta.description or ""
+        ).lower()
+
+        fabricante = (
+            porta.manufacturer or ""
+        ).lower()
+
+        print(
+            f"{porta.device} - "
+            f"{porta.description}"
         )
 
-        time.sleep(2)
-        return arduino
+        # Procura por nomes comuns de Arduino
+        if (
+            "arduino" in descricao
+            or "arduino" in fabricante
+            or "usb serial" in descricao
+            or "ch340" in descricao
+            or "ch340" in fabricante
+            or "wch" in descricao
+            or "wch" in fabricante
+        ):
 
-    except Exception as e:
-        print("Erro ao conectar ao Arduino:")
-        print(e)
-        return None
+            try:
+
+                arduino = serial.Serial(
+                    porta.device,
+                    9600,
+                    timeout=1
+                )
+
+                # O Arduino normalmente reinicia
+                # quando a porta serial é aberta
+                time.sleep(2)
+
+                print(
+                    f"Arduino encontrado em: "
+                    f"{porta.device}"
+                )
+
+                return arduino
+
+            except serial.SerialException as erro:
+
+                print(
+                    f"Erro ao abrir {porta.device}: "
+                    f"{erro}"
+                )
+
+    print("Arduino não encontrado.")
+
+    return None
+
 # YOLO
 
 def iniciar_modelo():
@@ -237,21 +296,23 @@ def calcular_angulo_servo_y(angulo_y):
 
 # ENVIO PARA O ARDUINO
 
-def enviar_servo(
-    arduino,
-    angulo_servo_x,
-    angulo_servo_y
-):
+def enviar_servo(arduino, angulo_servo_x, angulo_servo_y, acionar_gatilho=False):
+    gatilho = 1 if acionar_gatilho else 0
+    comando = f"{angulo_servo_x:.0f},{angulo_servo_y:.0f},{gatilho}\n"
+    arduino.write(comando.encode())
 
-    comando = (
-        f"{angulo_servo_x:.0f},{angulo_servo_y:.0f}\n"
-    )
+# LEITURA DO ARDUINO
 
-    arduino.write(
-        comando.encode()
-    )
+def ler_arduino(arduino):
+    try:
+        if arduino.in_waiting > 0:
+            linha = arduino.readline().decode().strip()
+            return linha
+    except:
+        pass
+    return ""
 
-# DETECÇÃO DA PESSOA
+# DETECÇÃO DA PESSOA/OBJETO
 
 def detectar_objeto(
     modelo,
@@ -296,6 +357,49 @@ def detectar_objeto(
             })
 
     return deteccoes
+
+# Desenha status de cooldown e recarga na tela
+
+def desenhar_status(frame, usos, cooldown_restante, esperando_recarga):
+    altura, largura = frame.shape[:2]
+
+    # Fundo do painel de status
+    cv2.rectangle(frame, (10, 10), (320, 100), (30, 30, 30), -1)
+    cv2.rectangle(frame, (10, 10), (320, 100), (80, 80, 80), 1)
+
+    # Ícones de uso (balas)
+    for i in range(MAX_USOS_GATILHO):
+        cor = (0, 200, 100) if i >= usos else (50, 50, 200)
+        cx = 30 + i * 35
+        cv2.circle(frame, (cx, 35), 12, cor, -1)
+        cv2.putText(frame, str(i + 1), (cx - 6, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    # Status de recarga
+    if esperando_recarga:
+        cv2.putText(frame, "! PRESSIONE O BOTAO PARA RECARREGAR !",
+                    (15, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 80, 255), 2)
+
+    # Barra de cooldown
+    elif cooldown_restante > 0:
+        progresso_cd = 1.0 - (cooldown_restante / COOLDOWN_GATILHO)
+        barra_x      = 15
+        barra_y      = 65
+        barra_larg   = 290
+        barra_alt    = 18
+        preenchido   = int(barra_larg * progresso_cd)
+
+        cv2.rectangle(frame, (barra_x, barra_y),
+                      (barra_x + barra_larg, barra_y + barra_alt), (60, 60, 60), -1)
+        cv2.rectangle(frame, (barra_x, barra_y),
+                      (barra_x + preenchido, barra_y + barra_alt), (0, 180, 255), -1)
+        cv2.putText(frame, f"Cooldown: {cooldown_restante:.1f}s",
+                    (barra_x, barra_y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 180, 255), 1)
+    else:
+        cv2.putText(frame, "PRONTO", (15, 85),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 100), 2)
+
 # DESENHA A DETECÇÃO
 
 def desenhar_deteccoes(frame, deteccoes, distancia_focal):
@@ -341,8 +445,40 @@ def desenhar_deteccoes(frame, deteccoes, distancia_focal):
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor, 2
         )
 
+# desenha mira mais barra de progresso
+def desenhar_mira(frame, progresso, na_mira, gatilho_acionado):
+    altura, largura = frame.shape[:2]
+    cx, cy = largura // 2, altura // 2
+
+    # Cruz central
+    cor_mira = (0, 255, 0) if na_mira else (100, 100, 100)
+    cv2.line(frame, (cx - 30, cy), (cx + 30, cy), cor_mira, 2)
+    cv2.line(frame, (cx, cy - 30), (cx, cy + 30), cor_mira, 2)
+    cv2.circle(frame, (cx, cy), 40, cor_mira, 1)
+
+    # Barra de progresso (arco ao redor da mira)
+    if na_mira and not gatilho_acionado:
+        angulo_arco = int(360 * progresso)
+        cv2.ellipse(frame, (cx, cy), (50, 50), -90, 0, angulo_arco, (0, 200, 255), 3)
+
+        # Tempo restante
+        restante = TEMPO_MIRA * (1 - progresso)
+        cv2.putText(frame, f"{restante:.1f}s", (cx + 55, cy + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+
+    # Aviso de FIRE
+    if gatilho_acionado:
+        cv2.putText(frame, "FIRE!", (cx - 35, cy - 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+
 # PROGRAMA PRINCIPAL
 def main():
+    # Variaveis
+    tempo_inicio_mira    = None
+    gatilho_acionado     = False
+    usos_gatilho         = 0
+    tempo_ultimo_gatilho = 0.0
+    esperando_recarga    = False
     # Inicialização
 
     camera = iniciar_camera()
@@ -381,20 +517,35 @@ def main():
 
         deteccoes = detectar_objeto(modelo, frame)  # lista agora
 
+        # Dentro do while True, substitua o bloco if deteccoes:
+        # 5. main() — substitua o bloco completo "if deteccoes:" dentro do while True:
+
+        # Lê sinal do botão vindo do Arduino
+        sinal = ler_arduino(arduino)
+        if sinal == "RECARGA" and esperando_recarga:
+            esperando_recarga    = False
+            usos_gatilho         = 0
+            tempo_ultimo_gatilho = 0.0
+            print("Recarga confirmada!")
+
+        # Calcula cooldown restante
+        cooldown_restante = max(
+            0.0,
+            COOLDOWN_GATILHO - (time.time() - tempo_ultimo_gatilho)
+        ) if tempo_ultimo_gatilho > 0 else 0.0
+
+        cooldown_ativo = cooldown_restante > 0
+
         if deteccoes:
-            # ESTRATÉGIA DE PRIORIDADE
-            if estrategia_prioridade == "A":
-                # Opção A: segue o primeiro da lista CLASSE_ALVO que aparecer
+            if ESTRATEGIA_PRIORIDADE == "A":
                 ordem = {nome: i for i, nome in enumerate(CLASSE_ALVO)}
                 alvo = min(deteccoes, key=lambda d: ordem.get(d["classe"], 99))
-            elif estrategia_prioridade == "B":
-                # Opção B: segue o objeto mais central na tela
+            elif ESTRATEGIA_PRIORIDADE == "B":
                 alvo = min(deteccoes, key=lambda d: abs(d["centro_x"] - largura / 2))
-            elif estrategia_prioridade == "C":
-                # Opção C: segue o maior objeto (maior área)
+            elif ESTRATEGIA_PRIORIDADE == "C":
                 alvo = max(deteccoes, key=lambda d: (d["x2"]-d["x1"]) * (d["y2"]-d["y1"]))
             else:
-                alvo = deteccoes[0]  # fallback 
+                alvo = deteccoes[0]
 
             angulo_servo_x = calcular_angulo_servo_x(
                 calcular_angulo_x(alvo["centro_x"], largura, distancia_focal)
@@ -403,8 +554,52 @@ def main():
                 calcular_angulo_y(alvo["centro_y"], altura, distancia_focal)
             )
 
-            enviar_servo(arduino, angulo_servo_x, angulo_servo_y)
-            desenhar_deteccoes(frame, deteccoes, distancia_focal)  # desenha todos
+            # ── LÓGICA DE MIRA ─────────────────────────────────
+            na_mira = (
+                abs(alvo["centro_x"] - largura / 2) < TOLERANCIA_MIRA and
+                abs(alvo["centro_y"] - altura  / 2) < TOLERANCIA_MIRA
+            )
+
+            if na_mira:
+                if tempo_inicio_mira is None:
+                    tempo_inicio_mira = time.time()
+                tempo_na_mira = time.time() - tempo_inicio_mira
+                progresso     = min(tempo_na_mira / TEMPO_MIRA, 1.0)
+            else:
+                tempo_inicio_mira = None
+                gatilho_acionado  = False
+                progresso         = 0.0
+
+            # ── DISPARO — checa cooldown e recarga ─────────────
+            pode_disparar = (
+                na_mira and
+                progresso >= 1.0 and
+                not gatilho_acionado and
+                not cooldown_ativo and
+                not esperando_recarga
+            )
+
+            if pode_disparar:
+                gatilho_acionado     = True
+                usos_gatilho        += 1
+                tempo_ultimo_gatilho = time.time()
+
+                if usos_gatilho >= MAX_USOS_GATILHO:
+                    esperando_recarga = True
+                    print(f"Munição esgotada! Pressione o botão para recarregar.")
+            # ───────────────────────────────────────────────────
+
+            enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado)
+            desenhar_deteccoes(frame, deteccoes, distancia_focal)
+            desenhar_mira(frame, progresso, na_mira, gatilho_acionado)
+
+        else:
+            tempo_inicio_mira = None
+            gatilho_acionado  = False
+            progresso         = 0.0
+            desenhar_mira(frame, 0, False, False)
+
+        desenhar_status(frame, usos_gatilho, cooldown_restante, esperando_recarga)
 
         cv2.imshow("Camera", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
