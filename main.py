@@ -19,7 +19,7 @@ FOV_HORIZONTAL = 90
 TOLERANCIA_MIRA = 60    # pixels do centro para considerar "na mira"
 TEMPO_MIRA       = 2.5  # segundos até acionar o servo gatilho
 COOLDOWN_GATILHO  = 10  # segundos de espera entre disparos
-MAX_USOS_GATILHO  = 2   # usos antes de exigir recarga
+MAX_USOS_GATILHO  = 1   # usos antes de exigir recarga
 
 # Classe alvo para detecção
 CLASSE_ALVO = ["celular"]
@@ -325,7 +325,7 @@ def detectar_objeto(
         if nome in CLASSES_DISPONIVEIS
     }
 
-    resultados = modelo(frame)
+    resultados = modelo(frame, verbose=False)
     deteccoes = []  # ← agora é uma lista, não um único objeto
 
     for resultado in resultados:
@@ -360,12 +360,20 @@ def detectar_objeto(
 
 # Desenha status de cooldown e recarga na tela
 
-def desenhar_status(frame, usos, cooldown_restante, esperando_recarga):
+def desenhar_status(frame, usos, cooldown_restante, esperando_recarga, sistema_ligado):
     altura, largura = frame.shape[:2]
 
     # Fundo do painel de status
     cv2.rectangle(frame, (10, 10), (320, 100), (30, 30, 30), -1)
     cv2.rectangle(frame, (10, 10), (320, 100), (80, 80, 80), 1)
+
+    # Indicador ligado/desligado
+    cor_estado = (0, 220, 80) if sistema_ligado else (60, 60, 200)
+    label_estado = "ON" if sistema_ligado else "OFF"
+    cv2.circle(frame, (295, 28), 10, cor_estado, -1)
+    cv2.putText(frame, label_estado, (280, 55),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, cor_estado, 1)
+
 
     # Ícones de uso (balas)
     for i in range(MAX_USOS_GATILHO):
@@ -474,11 +482,13 @@ def desenhar_mira(frame, progresso, na_mira, gatilho_acionado):
 # PROGRAMA PRINCIPAL
 def main():
     # Variaveis
-    tempo_inicio_mira    = None
-    gatilho_acionado     = False
-    usos_gatilho         = 0
+    sistema_ligado = False
+    tempo_inicio_mira = None
+    gatilho_acionado = False
+    progresso = 0.0
+    usos_gatilho = 0
     tempo_ultimo_gatilho = 0.0
-    esperando_recarga    = False
+    esperando_recarga = False
     # Inicialização
 
     camera = iniciar_camera()
@@ -515,19 +525,31 @@ def main():
         altura, largura = frame.shape[:2]
         distancia_focal = calcular_distancia_focal(largura)
 
-        deteccoes = detectar_objeto(modelo, frame)  # lista agora
-
         # Dentro do while True, substitua o bloco if deteccoes:
         # 5. main() — substitua o bloco completo "if deteccoes:" dentro do while True:
 
         # Lê sinal do botão vindo do Arduino
         sinal = ler_arduino(arduino)
-        if sinal == "RECARGA" and esperando_recarga:
+ 
+        if sinal == "Ligado":
+            sistema_ligado = True
+            print("Sistema LIGADO")
+ 
+        elif sinal == "Desligado":
+            sistema_ligado    = False
+            # Reseta o estado ao desligar
+            tempo_inicio_mira = None
+            gatilho_acionado  = False
+            progresso         = 0.0
+            print("Sistema DESLIGADO")
+ 
+        elif sinal == "RECARGA" and esperando_recarga:
             esperando_recarga    = False
             usos_gatilho         = 0
             tempo_ultimo_gatilho = 0.0
-            print("Recarga confirmada!")
+            print("Recarga confirmada! Sistema liberado.")
 
+            
         # Calcula cooldown restante
         cooldown_restante = max(
             0.0,
@@ -536,62 +558,66 @@ def main():
 
         cooldown_ativo = cooldown_restante > 0
 
-        if deteccoes:
-            if ESTRATEGIA_PRIORIDADE == "A":
-                ordem = {nome: i for i, nome in enumerate(CLASSE_ALVO)}
-                alvo = min(deteccoes, key=lambda d: ordem.get(d["classe"], 99))
-            elif ESTRATEGIA_PRIORIDADE == "B":
-                alvo = min(deteccoes, key=lambda d: abs(d["centro_x"] - largura / 2))
-            elif ESTRATEGIA_PRIORIDADE == "C":
-                alvo = max(deteccoes, key=lambda d: (d["x2"]-d["x1"]) * (d["y2"]-d["y1"]))
-            else:
-                alvo = deteccoes[0]
+        if sistema_ligado:
+            # Apenas roda o sistema caso ligado
+            deteccoes = detectar_objeto(modelo, frame)
+            
+            if deteccoes:
+                if ESTRATEGIA_PRIORIDADE == "A":
+                    ordem = {nome: i for i, nome in enumerate(CLASSE_ALVO)}
+                    alvo = min(deteccoes, key=lambda d: ordem.get(d["classe"], 99))
+                elif ESTRATEGIA_PRIORIDADE == "B":
+                    alvo = min(deteccoes, key=lambda d: abs(d["centro_x"] - largura / 2))
+                elif ESTRATEGIA_PRIORIDADE == "C":
+                    alvo = max(deteccoes, key=lambda d: (d["x2"]-d["x1"]) * (d["y2"]-d["y1"]))
+                else:
+                    alvo = deteccoes[0]
 
-            angulo_servo_x = calcular_angulo_servo_x(
-                calcular_angulo_x(alvo["centro_x"], largura, distancia_focal)
-            )
-            angulo_servo_y = calcular_angulo_servo_y(
-                calcular_angulo_y(alvo["centro_y"], altura, distancia_focal)
-            )
+                angulo_servo_x = calcular_angulo_servo_x(
+                    calcular_angulo_x(alvo["centro_x"], largura, distancia_focal)
+                )
+                angulo_servo_y = calcular_angulo_servo_y(
+                    calcular_angulo_y(alvo["centro_y"], altura, distancia_focal)
+                )
 
-            # ── LÓGICA DE MIRA ─────────────────────────────────
-            na_mira = (
-                abs(alvo["centro_x"] - largura / 2) < TOLERANCIA_MIRA and
-                abs(alvo["centro_y"] - altura  / 2) < TOLERANCIA_MIRA
-            )
+                # ── LÓGICA DE MIRA ─────────────────────────────────
+                na_mira = (
+                    abs(alvo["centro_x"] - largura / 2) < TOLERANCIA_MIRA and
+                    abs(alvo["centro_y"] - altura  / 2) < TOLERANCIA_MIRA
+                )
 
-            if na_mira:
-                if tempo_inicio_mira is None:
-                    tempo_inicio_mira = time.time()
-                tempo_na_mira = time.time() - tempo_inicio_mira
-                progresso     = min(tempo_na_mira / TEMPO_MIRA, 1.0)
-            else:
-                tempo_inicio_mira = None
-                gatilho_acionado  = False
-                progresso         = 0.0
+                if na_mira:
+                    if tempo_inicio_mira is None:
+                        tempo_inicio_mira = time.time()
+                    tempo_na_mira = time.time() - tempo_inicio_mira
+                    progresso     = min(tempo_na_mira / TEMPO_MIRA, 1.0)
+                else:
+                    tempo_inicio_mira = None
+                    gatilho_acionado  = False
+                    progresso         = 0.0
 
-            # ── DISPARO — checa cooldown e recarga ─────────────
-            pode_disparar = (
-                na_mira and
-                progresso >= 1.0 and
-                not gatilho_acionado and
-                not cooldown_ativo and
-                not esperando_recarga
-            )
+                # ── DISPARO — checa cooldown e recarga ─────────────
+                pode_disparar = (
+                    na_mira and
+                    progresso >= 1.0 and
+                    not gatilho_acionado and
+                    not cooldown_ativo and
+                    not esperando_recarga
+                )
 
-            if pode_disparar:
-                gatilho_acionado     = True
-                usos_gatilho        += 1
-                tempo_ultimo_gatilho = time.time()
+                if pode_disparar:
+                    gatilho_acionado     = True
+                    usos_gatilho        += 1
+                    tempo_ultimo_gatilho = time.time()
 
-                if usos_gatilho >= MAX_USOS_GATILHO:
-                    esperando_recarga = True
-                    print(f"Munição esgotada! Pressione o botão para recarregar.")
-            # ───────────────────────────────────────────────────
+                    if usos_gatilho >= MAX_USOS_GATILHO:
+                        esperando_recarga = True
+                        print(f"Munição esgotada! Pressione o botão para recarregar.")
+                # ───────────────────────────────────────────────────
 
-            enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado)
-            desenhar_deteccoes(frame, deteccoes, distancia_focal)
-            desenhar_mira(frame, progresso, na_mira, gatilho_acionado)
+                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado)
+                desenhar_deteccoes(frame, deteccoes, distancia_focal)
+                desenhar_mira(frame, progresso, na_mira, gatilho_acionado)
 
         else:
             tempo_inicio_mira = None
@@ -599,7 +625,7 @@ def main():
             progresso         = 0.0
             desenhar_mira(frame, 0, False, False)
 
-        desenhar_status(frame, usos_gatilho, cooldown_restante, esperando_recarga)
+        desenhar_status(frame, usos_gatilho, cooldown_restante, esperando_recarga, sistema_ligado)
 
         cv2.imshow("Camera", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
