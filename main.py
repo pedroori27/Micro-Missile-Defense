@@ -296,9 +296,10 @@ def calcular_angulo_servo_y(angulo_y):
 
 # ENVIO PARA O ARDUINO
 
-def enviar_servo(arduino, angulo_servo_x, angulo_servo_y, acionar_gatilho=False):
+def enviar_servo(arduino, angulo_servo_x, angulo_servo_y, acionar_gatilho=False, mirando=False):
     gatilho = 1 if acionar_gatilho else 0
-    comando = f"{angulo_servo_x:.0f},{angulo_servo_y:.0f},{gatilho}\n"
+    mira = 1 if mirando else 0
+    comando = f"{angulo_servo_x:.0f},{angulo_servo_y:.0f},{gatilho},{mira}\n"
     arduino.write(comando.encode())
 
 # LEITURA DO ARDUINO
@@ -615,7 +616,7 @@ def main():
                         print(f"Munição esgotada! Pressione o botão para recarregar.")
                 # ───────────────────────────────────────────────────
 
-                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado)
+                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado, na_mira)
                 desenhar_deteccoes(frame, deteccoes, distancia_focal)
                 desenhar_mira(frame, progresso, na_mira, gatilho_acionado)
 
