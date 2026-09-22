@@ -13,13 +13,17 @@ CONFIANCA_MINIMA = 0.40
 ANGULO_CENTRO_SERVO = 90
 
 # FOV horizontal que tem a câmera
-FOV_HORIZONTAL = 90
+FOV_HORIZONTAL = 130
 
 # Atirar com o servo
 TOLERANCIA_MIRA = 60    # pixels do centro para considerar "na mira"
 TEMPO_MIRA       = 2.5  # segundos até acionar o servo gatilho
 COOLDOWN_GATILHO  = 10  # segundos de espera entre disparos
 MAX_USOS_GATILHO  = 1   # usos antes de exigir recarga
+
+# Suavização da posição do alvo entre frames (0 a 1)
+# Menor = mais suave e mais "atrasado"; maior = mais responsivo e mais "trêmulo"
+ALPHA_SUAVIZACAO = 0.3
 
 # Classe alvo para detecção
 CLASSE_ALVO = ["celular"]
@@ -236,7 +240,7 @@ def calcular_angulo_servo_x(angulo_x):
 
     angulo_servo_x = (
         ANGULO_CENTRO_SERVO
-        +
+        -
         angulo_x
     )
 
@@ -483,13 +487,16 @@ def desenhar_mira(frame, progresso, na_mira, gatilho_acionado):
 # PROGRAMA PRINCIPAL
 def main():
     # Variaveis
-    sistema_ligado = False
+    sistema_ligado = True
     tempo_inicio_mira = None
     gatilho_acionado = False
     progresso = 0.0
     usos_gatilho = 0
     tempo_ultimo_gatilho = 0.0
     esperando_recarga = False
+    centro_x_suave = None
+    centro_y_suave = None
+
     # Inicialização
 
     camera = iniciar_camera()
@@ -542,6 +549,8 @@ def main():
             tempo_inicio_mira = None
             gatilho_acionado  = False
             progresso         = 0.0
+            centro_x_suave    = None
+            centro_y_suave    = None
             print("Sistema DESLIGADO")
  
         elif sinal == "RECARGA" and esperando_recarga:
@@ -574,18 +583,28 @@ def main():
                 else:
                     alvo = deteccoes[0]
 
+                # SUAVIZAÇÃO DO ALVO 
+                # A posição bruta da YOLO "treme" um pouco quadro a quadro;
+                # isso suaviza antes de calcular o ângulo, pra não ficar
+                # mandando micro-correções pro servo o tempo todo.
+                if centro_x_suave is None:
+                    centro_x_suave = alvo["centro_x"]
+                    centro_y_suave = alvo["centro_y"]
+                else:
+                    centro_x_suave = (ALPHA_SUAVIZACAO * alvo["centro_x"]
+                                       + (1 - ALPHA_SUAVIZACAO) * centro_x_suave)
+                    centro_y_suave = (ALPHA_SUAVIZACAO * alvo["centro_y"]
+                                       + (1 - ALPHA_SUAVIZACAO) * centro_y_suave)
+ 
                 angulo_servo_x = calcular_angulo_servo_x(
-                    calcular_angulo_x(alvo["centro_x"], largura, distancia_focal)
+                    calcular_angulo_x(centro_x_suave, largura, distancia_focal)
                 )
                 angulo_servo_y = calcular_angulo_servo_y(
-                    calcular_angulo_y(alvo["centro_y"], altura, distancia_focal)
+                    calcular_angulo_y(centro_y_suave, altura, distancia_focal)
                 )
 
-                # ── LÓGICA DE MIRA ─────────────────────────────────
-                na_mira = (
-                    abs(alvo["centro_x"] - largura / 2) < TOLERANCIA_MIRA and
-                    abs(alvo["centro_y"] - altura  / 2) < TOLERANCIA_MIRA
-                )
+                # LÓGICA DE MIRA
+                na_mira = (abs(centro_x_suave - largura / 2) < TOLERANCIA_MIRA and abs(centro_y_suave - altura  / 2) < TOLERANCIA_MIRA)
 
                 if na_mira:
                     if tempo_inicio_mira is None:
