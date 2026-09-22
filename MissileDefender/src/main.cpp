@@ -32,6 +32,12 @@ const int FREQ_BIP_MIRA     = 2200;  // tom do bip leve de rastreio
 const int DURACAO_BIP_MIRA  = 50;    // duração de cada bip de rastreio (ms)
 const int INTERVALO_BIP_MIRA = 350;  // intervalo entre bips de rastreio (ms)
  
+const int FREQ_BIP_DESLIGAR    = 800;   // tom do bipe ao desligar (grave)
+const int DURACAO_BIP_DESLIGAR = 300;   // duração do bipe ao desligar (ms)
+ 
+const int FREQ_BIP_RECARGA     = 1000;  // tom do bipe ao recarregar
+const int DURACAO_BIP_RECARGA  = 150;   // duração do bipe de recarga (ms)
+ 
 int ligando = 0;
  
 int ultimoAnguloX = 90;
@@ -48,6 +54,10 @@ bool           botao_anterior_ligar  = HIGH;
 unsigned long  tempo_debounce_ligar = 0;
  
 bool ligar = false;  // Estado do sistema (ligado/desligado)
+ 
+bool          beep_extra_ativo   = false;  // true enquanto o bipe de ligar/desligar/recarga está tocando
+unsigned long tempo_beep_extra   = 0;
+unsigned long duracao_beep_extra = 0;
  
 bool          mirando_atual         = false; // estado mais recente vindo do Python
 unsigned long tempo_ultimo_bip_mira = 0;
@@ -69,6 +79,15 @@ void moverServoSuave(Servo &servo, int &anguloAtual, int alvo) {
     ultimoPassoY = millis();
 }
  
+ 
+// Inicia um bipe (ligar/desligar/recarga) e o marca como prioritário,
+// para que não seja cortado pela lógica de mira/disparo no mesmo loop().
+void iniciarBeep(int frequencia, unsigned long duracao) {
+    tone(BUZZER, frequencia, duracao);
+    beep_extra_ativo   = true;
+    tempo_beep_extra   = millis();
+    duracao_beep_extra = duracao;
+}
  
 void setup() {
     Serial.begin(9600);
@@ -111,7 +130,7 @@ void loop() {
  
         if (ligar) {
             // Bipe de confirmação ao ligar
-            tone(BUZZER, FREQ_BIP_LIGAR, DURACAO_BIP_LIGAR);
+            iniciarBeep(FREQ_BIP_LIGAR, DURACAO_BIP_LIGAR);
         } else {
             // Centraliza X e Y ao desligar
             servox.write(90);
@@ -120,6 +139,9 @@ void loop() {
             ultimoAnguloY = 90;
             anguloAlvoY   = 90;
             mirando_atual = false;
+ 
+            // Bipe de confirmação ao desligar
+            iniciarBeep(FREQ_BIP_DESLIGAR, DURACAO_BIP_DESLIGAR);
         }
  
         tempo_debounce_ligar = millis();
@@ -135,7 +157,14 @@ void loop() {
         digitalWrite(LED_LIGANDO,   LOW);
         digitalWrite(LED_ATIRANDO,  LOW);
         digitalWrite(LED_MIRANDO,   LOW);
-        noTone(BUZZER);
+ 
+        // Só corta o som depois que o bipe de "desligado" tiver tocado por completo
+        if (beep_extra_ativo && (millis() - tempo_beep_extra < duracao_beep_extra)) {
+            // deixa o bipe terminar
+        } else {
+            noTone(BUZZER);
+            beep_extra_ativo = false;
+        }
         return;
     }
     
@@ -160,6 +189,7 @@ void loop() {
     if (botao_atual == LOW && botao_anterior == HIGH && (millis() - tempo_debounce > DEBOUNCE_MS))
     {
         Serial.println("RECARGA");   // Python recebe e libera o sistema
+        iniciarBeep(FREQ_BIP_RECARGA, DURACAO_BIP_RECARGA);
         tempo_debounce = millis();
     }
     botao_anterior = botao_atual;
@@ -173,13 +203,21 @@ void loop() {
     // LED e buzzer de disparo / bip leve de rastreio
     bool atirando_agora = gatilho_ativo || (millis() - tempo_brilho_gatilho < DURACAO_BRILHO_GATILHO);
  
+    // Libera o buzzer assim que o bipe extra (ligar/desligar/recarga) já tiver tocado por completo
+    if (beep_extra_ativo && (millis() - tempo_beep_extra >= duracao_beep_extra)) {
+        beep_extra_ativo = false;
+    }
+ 
     if (atirando_agora) {
         digitalWrite(LED_ATIRANDO, HIGH);
-        tone(BUZZER, 1200);  // beep 1.2kHz enquanto atira (tem prioridade sobre o bip de mira)
+        tone(BUZZER, 1200);  // beep 1.2kHz enquanto atira (tem prioridade sobre qualquer outro bipe)
+        beep_extra_ativo = false;
     } else {
         digitalWrite(LED_ATIRANDO, LOW);
  
-        if (mirando_atual) {
+        if (beep_extra_ativo) {
+            // bipe de ligar/desligar/recarga ainda tocando: não mexe no buzzer
+        } else if (mirando_atual) {
             // Bip leve e intermitente enquanto está seguindo o alvo
             if (millis() - tempo_ultimo_bip_mira >= INTERVALO_BIP_MIRA) {
                 tone(BUZZER, FREQ_BIP_MIRA, DURACAO_BIP_MIRA);
