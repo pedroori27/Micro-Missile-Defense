@@ -4,6 +4,7 @@ import serial
 from ultralytics import YOLO
 import serial.tools.list_ports
 import time
+import subprocess
 
 # CONFIGURAÇÕES
 
@@ -12,14 +13,42 @@ CONFIANCA_MINIMA = 0.40
 # Ângulo central do servo
 ANGULO_CENTRO_SERVO = 90
 
+# Inverte o sentido caso o servo esteja montado ao contrário
+INVERTER_X = True
+INVERTER_Y = False
+
 # FOV horizontal que tem a câmera
-FOV_HORIZONTAL = 90
+FOV_HORIZONTAL = 130
+
+# FOV vertical que tem a câmera
+FOV_VERTICAL = 62
+
+# Câmera USB encontrada no Linux
+INDICE_CAMERA = 2
+DISPOSITIVO_CAMERA = "/dev/video2"
 
 # Atirar com o servo
 TOLERANCIA_MIRA = 60    # pixels do centro para considerar "na mira"
 TEMPO_MIRA       = 2.5  # segundos até acionar o servo gatilho
 COOLDOWN_GATILHO  = 10  # segundos de espera entre disparos
 MAX_USOS_GATILHO  = 1   # usos antes de exigir recarga
+
+# Suavização da posição do alvo entre frames (0 a 1)
+# Menor = mais suave e mais "atrasado"; maior = mais responsivo e mais "trêmulo"
+ALPHA_SUAVIZACAO = 0.3
+
+# Velocidade/sensibilidade do rastreamento
+# Menor = movimento mais suave; maior = movimento mais rápido
+GANHO_RASTREIO_X = 0.05
+GANHO_RASTREIO_Y = 0.05
+
+# Máximo que cada servo pode corrigir por atualização
+PASSO_MAXIMO_X = 1.0
+PASSO_MAXIMO_Y = 1.0
+
+# Limites para evitar que os servos cheguem ao fim mecânico
+ANGULO_MINIMO = 15
+ANGULO_MAXIMO = 165
 
 # Classe alvo para detecção
 CLASSE_ALVO = ["celular"]
@@ -45,68 +74,108 @@ def iniciar_camera():
 
     print("Procurando câmera...")
 
-    # Tenta algumas portas de câmera
-    for indice in range(10):
-
-        print(f"Tentando câmera {indice}...")
-
-        # Windows / Linux
-        camera = cv2.VideoCapture(indice)
-
-        if not camera.isOpened():
-            camera.release()
-            continue
-
-        # Tenta configurar a câmera
-        camera.set(
-            cv2.CAP_PROP_FOURCC,
-            cv2.VideoWriter_fourcc(*"MJPG")
+    # Ajusta a frequência da rede elétrica para 60 Hz
+    # Isso ajuda a evitar cintilação com algumas iluminações artificiais
+    try:
+        subprocess.run(
+            [
+                "v4l2-ctl",
+                f"--device={DISPOSITIVO_CAMERA}",
+                "--set-ctrl=power_line_frequency=2"
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False
         )
+    except FileNotFoundError:
+        # Caso v4l2-ctl não esteja instalado, o programa continua normalmente
+        pass
 
-        camera.set(
-            cv2.CAP_PROP_FRAME_WIDTH,
-            1920
-        )
+    print(f"Tentando câmera {INDICE_CAMERA}...")
 
-        camera.set(
-            cv2.CAP_PROP_FRAME_HEIGHT,
-            1080
-        )
+    # Linux / V4L2
+    camera = cv2.VideoCapture(
+        INDICE_CAMERA,
+        cv2.CAP_V4L2
+    )
 
-        camera.set(
-            cv2.CAP_PROP_FPS,
-            30
-        )
+    if not camera.isOpened():
+        camera.release()
+        print("Nenhuma câmera encontrada.")
+        return None
 
-        # Testa se realmente consegue receber uma imagem
-        ret, frame = camera.read()
+    # Tenta configurar a câmera
+    camera.set(
+        cv2.CAP_PROP_FOURCC,
+        cv2.VideoWriter_fourcc(*"MJPG")
+    )
 
-        if not ret:
-            camera.release()
-            continue
+    camera.set(
+        cv2.CAP_PROP_FRAME_WIDTH,
+        1920
+    )
 
-        largura = int(
-            camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-        )
+    camera.set(
+        cv2.CAP_PROP_FRAME_HEIGHT,
+        1080
+    )
 
-        altura = int(
-            camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        )
+    camera.set(
+        cv2.CAP_PROP_FPS,
+        30
+    )
 
-        fps = camera.get(
-            cv2.CAP_PROP_FPS
-        )
+    # Testa se realmente consegue receber uma imagem
+    ret, frame = camera.read()
 
-        print("Câmera encontrada!")
-        print(f"Índice: {indice}")
-        print(f"Resolução: {largura}x{altura}")
-        print(f"FPS: {fps:.0f}")
+    if not ret:
+        camera.release()
+        print("A câmera foi encontrada, mas não retornou imagem.")
+        return None
 
-        return camera
+    largura = int(
+        camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+    )
 
-    print("Nenhuma câmera encontrada.")
+    altura = int(
+        camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    )
 
-    return None
+    fps = camera.get(
+        cv2.CAP_PROP_FPS
+    )
+
+    # Verifica o formato realmente aceito pela câmera
+    fourcc = int(
+        camera.get(cv2.CAP_PROP_FOURCC)
+    )
+
+    formato = "".join([
+        chr(fourcc & 0xFF),
+        chr((fourcc >> 8) & 0xFF),
+        chr((fourcc >> 16) & 0xFF),
+        chr((fourcc >> 24) & 0xFF)
+    ])
+
+    print("Câmera encontrada!")
+    print(f"Índice: {INDICE_CAMERA}")
+    print(f"Dispositivo: {DISPOSITIVO_CAMERA}")
+    print(f"Resolução: {largura}x{altura}")
+    print(f"FPS: {fps:.0f}")
+    print(f"Formato: {formato}")
+
+    # A câmera deve trabalhar em MJPG para alcançar 30 FPS em 1920x1080
+    if formato.strip() != "MJPG":
+        print("AVISO: a câmera não está usando MJPG.")
+
+    if largura != 1920 or altura != 1080:
+        print("AVISO: a câmera não aceitou 1920x1080.")
+
+    if fps < 25:
+        print("AVISO: a câmera está trabalhando abaixo de 30 FPS.")
+
+    return camera
+
 
 # ARDUINO
 
@@ -192,14 +261,14 @@ def iniciar_modelo():
 
 # CÁLCULO DA DISTÂNCIA FOCAL
 
-def calcular_distancia_focal(largura):
+def calcular_distancia_focal(tamanho, fov):
 
     distancia_focal = (
-        (largura / 2)
+        (tamanho / 2)
         /
         math.tan(
             math.radians(
-                FOV_HORIZONTAL / 2
+                fov / 2
             )
         )
     )
@@ -232,19 +301,38 @@ def calcular_angulo_x(
 
 # ÂNGULO DO SERVO
 
-def calcular_angulo_servo_x(angulo_x):
+def calcular_angulo_servo_x(angulo_x, angulo_atual):
 
-    angulo_servo_x = (
-        ANGULO_CENTRO_SERVO
-        +
+    if INVERTER_X:
+        angulo_x = -angulo_x
+
+    # Usa o ângulo detectado como uma pequena correção da posição atual
+    correcao = (
         angulo_x
+        *
+        GANHO_RASTREIO_X
     )
 
-    # Limita entre 0 e 180
-    angulo_servo_x = max(
-        0,
+    # Limita a velocidade da correção
+    correcao = max(
+        -PASSO_MAXIMO_X,
         min(
-            180,
+            PASSO_MAXIMO_X,
+            correcao
+        )
+    )
+
+    angulo_servo_x = (
+        angulo_atual
+        +
+        correcao
+    )
+
+    # Limita para não chegar ao fim mecânico do servo
+    angulo_servo_x = max(
+        ANGULO_MINIMO,
+        min(
+            ANGULO_MAXIMO,
             angulo_servo_x
         )
     )
@@ -275,19 +363,38 @@ def calcular_angulo_y(
 
 # ÂNGULO DO SERVO
 
-def calcular_angulo_servo_y(angulo_y):
+def calcular_angulo_servo_y(angulo_y, angulo_atual):
 
-    angulo_servo_y = (
-        ANGULO_CENTRO_SERVO
-        +
+    if INVERTER_Y:
+        angulo_y = -angulo_y
+
+    # Usa o ângulo detectado como uma pequena correção da posição atual
+    correcao = (
         angulo_y
+        *
+        GANHO_RASTREIO_Y
     )
 
-    # Limita entre 0 e 180
-    angulo_servo_y = max(
-        0,
+    # Limita a velocidade da correção
+    correcao = max(
+        -PASSO_MAXIMO_Y,
         min(
-            180,
+            PASSO_MAXIMO_Y,
+            correcao
+        )
+    )
+
+    angulo_servo_y = (
+        angulo_atual
+        +
+        correcao
+    )
+
+    # Limita para não chegar ao fim mecânico do servo
+    angulo_servo_y = max(
+        ANGULO_MINIMO,
+        min(
+            ANGULO_MAXIMO,
             angulo_servo_y
         )
     )
@@ -309,7 +416,7 @@ def ler_arduino(arduino):
         if arduino.in_waiting > 0:
             linha = arduino.readline().decode().strip()
             return linha
-    except:
+    except (serial.SerialException, UnicodeDecodeError):
         pass
     return ""
 
@@ -411,7 +518,7 @@ def desenhar_status(frame, usos, cooldown_restante, esperando_recarga, sistema_l
 
 # DESENHA A DETECÇÃO
 
-def desenhar_deteccoes(frame, deteccoes, distancia_focal):
+def desenhar_deteccoes(frame, deteccoes, distancia_focal_x, distancia_focal_y):
 
     altura, largura = frame.shape[:2]
 
@@ -423,8 +530,8 @@ def desenhar_deteccoes(frame, deteccoes, distancia_focal):
         x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
         centro_x, centro_y = det["centro_x"], det["centro_y"]
 
-        angulo_x = calcular_angulo_x(centro_x, largura, distancia_focal)
-        angulo_y = calcular_angulo_y(centro_y, altura, distancia_focal)
+        angulo_x = calcular_angulo_x(centro_x, largura, distancia_focal_x)
+        angulo_y = calcular_angulo_y(centro_y, altura, distancia_focal_y)
 
         # Cor diferente por classe
         CORES = {
@@ -490,6 +597,11 @@ def main():
     usos_gatilho = 0
     tempo_ultimo_gatilho = 0.0
     esperando_recarga = False
+    centro_x_suave = None
+    centro_y_suave = None
+    angulo_servo_x = ANGULO_CENTRO_SERVO
+    angulo_servo_y = ANGULO_CENTRO_SERVO
+
     # Inicialização
 
     camera = iniciar_camera()
@@ -524,7 +636,8 @@ def main():
             break
 
         altura, largura = frame.shape[:2]
-        distancia_focal = calcular_distancia_focal(largura)
+        distancia_focal_x = calcular_distancia_focal(largura, FOV_HORIZONTAL)
+        distancia_focal_y = calcular_distancia_focal(altura, FOV_VERTICAL)
 
         # Dentro do while True, substitua o bloco if deteccoes:
         # 5. main() — substitua o bloco completo "if deteccoes:" dentro do while True:
@@ -534,6 +647,8 @@ def main():
  
         if sinal == "Ligado":
             sistema_ligado = True
+            angulo_servo_x = ANGULO_CENTRO_SERVO
+            angulo_servo_y = ANGULO_CENTRO_SERVO
             print("Sistema LIGADO")
  
         elif sinal == "Desligado":
@@ -542,6 +657,8 @@ def main():
             tempo_inicio_mira = None
             gatilho_acionado  = False
             progresso         = 0.0
+            centro_x_suave    = None
+            centro_y_suave    = None
             print("Sistema DESLIGADO")
  
         elif sinal == "RECARGA" and esperando_recarga:
@@ -574,18 +691,43 @@ def main():
                 else:
                     alvo = deteccoes[0]
 
-                angulo_servo_x = calcular_angulo_servo_x(
-                    calcular_angulo_x(alvo["centro_x"], largura, distancia_focal)
-                )
-                angulo_servo_y = calcular_angulo_servo_y(
-                    calcular_angulo_y(alvo["centro_y"], altura, distancia_focal)
+                # SUAVIZAÇÃO DO ALVO 
+                # A posição bruta da YOLO "treme" um pouco quadro a quadro;
+                # isso suaviza antes de calcular o ângulo, pra não ficar
+                # mandando micro-correções pro servo o tempo todo.
+                if centro_x_suave is None:
+                    centro_x_suave = alvo["centro_x"]
+                    centro_y_suave = alvo["centro_y"]
+                else:
+                    centro_x_suave = (ALPHA_SUAVIZACAO * alvo["centro_x"]
+                                       + (1 - ALPHA_SUAVIZACAO) * centro_x_suave)
+                    centro_y_suave = (ALPHA_SUAVIZACAO * alvo["centro_y"]
+                                       + (1 - ALPHA_SUAVIZACAO) * centro_y_suave)
+ 
+                angulo_x = calcular_angulo_x(
+                    centro_x_suave,
+                    largura,
+                    distancia_focal_x
                 )
 
-                # ── LÓGICA DE MIRA ─────────────────────────────────
-                na_mira = (
-                    abs(alvo["centro_x"] - largura / 2) < TOLERANCIA_MIRA and
-                    abs(alvo["centro_y"] - altura  / 2) < TOLERANCIA_MIRA
+                angulo_y = calcular_angulo_y(
+                    centro_y_suave,
+                    altura,
+                    distancia_focal_y
                 )
+
+                angulo_servo_x = calcular_angulo_servo_x(
+                    angulo_x,
+                    angulo_servo_x
+                )
+
+                angulo_servo_y = calcular_angulo_servo_y(
+                    angulo_y,
+                    angulo_servo_y
+                )
+
+                # LÓGICA DE MIRA
+                na_mira = (abs(centro_x_suave - largura / 2) < TOLERANCIA_MIRA and abs(centro_y_suave - altura  / 2) < TOLERANCIA_MIRA)
 
                 if na_mira:
                     if tempo_inicio_mira is None:
@@ -606,19 +748,25 @@ def main():
                     not esperando_recarga
                 )
 
+                # Mantém a lógica visual de mira para testes.
+                # O acionamento físico automático permanece desativado.
                 if pode_disparar:
-                    gatilho_acionado     = True
-                    usos_gatilho        += 1
-                    tempo_ultimo_gatilho = time.time()
-
-                    if usos_gatilho >= MAX_USOS_GATILHO:
-                        esperando_recarga = True
-                        print(f"Munição esgotada! Pressione o botão para recarregar.")
+                    gatilho_acionado = True
+                    print("Alvo permaneceu na mira pelo tempo configurado.")
                 # ───────────────────────────────────────────────────
 
-                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado, na_mira)
-                desenhar_deteccoes(frame, deteccoes, distancia_focal)
+                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, False, na_mira)
+                desenhar_deteccoes(frame, deteccoes, distancia_focal_x, distancia_focal_y)
                 desenhar_mira(frame, progresso, na_mira, gatilho_acionado)
+
+            else:
+                # Se perder o alvo, limpa o estado da mira e da suavização
+                tempo_inicio_mira = None
+                gatilho_acionado  = False
+                progresso         = 0.0
+                centro_x_suave    = None
+                centro_y_suave    = None
+                desenhar_mira(frame, 0, False, False)
 
         else:
             tempo_inicio_mira = None

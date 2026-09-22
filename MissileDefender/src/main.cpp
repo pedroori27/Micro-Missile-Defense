@@ -21,7 +21,7 @@ const int ANGULO_REPOUSO  = 0;
 const int ANGULO_ACIONADO = 90;
 const int DURACAO_GATILHO = 600;
 const int DURACAO_BRILHO_GATILHO = 1000;
-const int ZONA_MORTA      = 2;
+const int ZONA_MORTA      = 8;
 const int DEBOUNCE_MS     = 50;
 
 int ligando = 0;
@@ -40,6 +40,24 @@ bool           botao_anterior_ligar  = HIGH;
 unsigned long  tempo_debounce_ligar = 0;
 
 bool ligar = false;  // Estado do sistema (ligado/desligado)
+
+int           anguloAlvoY     = 90;   // alvo mais recente vindo do Python
+unsigned long ultimoPassoY    = 0;
+const int     PASSO_ANGULO    = 2;    // graus por passo (menor = mais suave)
+const int     INTERVALO_PASSO = 15;   // ms entre passos (maior = mais devagar)
+
+// Move o servo Y gradualmente em direção a "alvo", alguns graus por vez,
+void moverServoSuave(Servo &servo, int &anguloAtual, int alvo) {
+    if (millis() - ultimoPassoY < INTERVALO_PASSO || anguloAtual == alvo) return;
+ 
+    int passo = (alvo > anguloAtual) ? PASSO_ANGULO : -PASSO_ANGULO;
+    if (abs(alvo - anguloAtual) < PASSO_ANGULO) passo = alvo - anguloAtual;
+ 
+    anguloAtual += passo;
+    servo.write(anguloAtual);
+    ultimoPassoY = millis();
+}
+
 
 void setup() {
     Serial.begin(9600);
@@ -82,6 +100,10 @@ void loop() {
         if (ligar) {
             servox.write(90);
             servoy.write(90);
+            ultimoAnguloX = 90;
+            ultimoAnguloY = 90;
+            anguloAlvoY   = 90;
+
         }
         tempo_debounce_ligar = millis();
     }
@@ -107,7 +129,7 @@ void loop() {
     int anguloAtualX = servox.read();
     int anguloAtualY = servoy.read();
 
-    if (anguloAtualX != 90 && anguloAtualY != 90 && ligando == 0) {
+    if ((anguloAtualX != 90 || anguloAtualY != 90) && ligando == 0) {
         digitalWrite(LED_LIGANDO, HIGH);
         digitalWrite(LED_LIGADO,  LOW);
     } else {
@@ -144,10 +166,15 @@ void loop() {
     if (Serial.available() > 0) {
         String entrada = Serial.readStringUntil('\n');
 
-        // Formato: "X,Y,GATILHO\n"
+        // Formato: "X,Y,GATILHO,MIRANDO\n"
         int virgula1 = entrada.indexOf(',');
         int virgula2 = entrada.indexOf(',', virgula1 + 1);
         int virgula3 = entrada.indexOf(',', virgula2 + 1);
+
+        // Ignora mensagens incompletas ou fora do formato esperado
+        if (virgula1 == -1 || virgula2 == -1 || virgula3 == -1) {
+            return;
+        }
 
         int novoAnguloX = entrada.substring(0, virgula1).toInt();
         int novoAnguloY = entrada.substring(virgula1 + 1, virgula2).toInt();
@@ -156,25 +183,35 @@ void loop() {
 
         novoAnguloX = constrain(novoAnguloX, 0, 180);
         novoAnguloY = constrain(novoAnguloY, 0, 180);
+        gatilho     = constrain(gatilho, 0, 1);
+        mirando     = constrain(mirando, 0, 1);
 
         // Brilho se tiver mirando
         digitalWrite(LED_MIRANDO, mirando ? HIGH : LOW);
 
-        // Move os servos de mira
-        if (abs(novoAnguloX - ultimoAnguloX) >= ZONA_MORTA || abs(novoAnguloY - ultimoAnguloY) >= ZONA_MORTA)
+                // Move o servo X (continua instantâneo)
+        if (abs(novoAnguloX - ultimoAnguloX) >= ZONA_MORTA)
         {
             servox.write(novoAnguloX);
-            servoy.write(novoAnguloY);
             ultimoAnguloX = novoAnguloX;
-            ultimoAnguloY = novoAnguloY;
+        }
+ 
+        // Servo Y: só atualiza o ALVO aqui. Quem realmente move é
+        // moverServoSuave(), chamada mais abaixo, a cada volta do loop().
+        if (abs(novoAnguloY - anguloAlvoY) >= ZONA_MORTA)
+        {
+            anguloAlvoY = novoAnguloY;
         }
 
+
         // Aciona o gatilho
+        // O acionamento físico automático está desativado para testes.
         if (gatilho == 1 && !gatilho_ativo) {
-            servo_gatilho.write(ANGULO_ACIONADO);
             gatilho_ativo = true;
             tempo_gatilho = millis();
-            Serial.println("DISPARO");
+            tempo_brilho_gatilho = millis();
+            Serial.println("MIRA_CONFIRMADA");
         }
     }
+    moverServoSuave(servoy, ultimoAnguloY, anguloAlvoY);
 }
