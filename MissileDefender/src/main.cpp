@@ -1,10 +1,10 @@
 #include <Arduino.h>
 #include <Servo.h>
-
+ 
 Servo servox;
 Servo servoy;
 Servo servo_gatilho;
-
+ 
 const int PINO_SERVOX = 9;
 const int PINO_SERVOY = 10;
 const int PINO_GATILHO = 11;
@@ -16,36 +16,47 @@ const int LED_LIGANDO = 5;
 const int LED_DESLIGADO = 4;
 const int LED_ATIRANDO = 3;
 const int LED_MIRANDO = 2;
-
-const int ANGULO_REPOUSO  = 0;
-const int ANGULO_ACIONADO = 90;
+ 
+const int ANGULO_REPOUSO  = 90;
+const int ANGULO_ACIONADO = 180;
 const int DURACAO_GATILHO = 600;
 const int DURACAO_BRILHO_GATILHO = 1000;
 const int ZONA_MORTA      = 8;
 const int DEBOUNCE_MS     = 50;
-
+ 
+// Sinalização sonora
+const int FREQ_BIP_LIGAR    = 1500;  // tom do bipe ao ligar
+const int DURACAO_BIP_LIGAR = 300;   // duração do bipe ao ligar (ms)
+ 
+const int FREQ_BIP_MIRA     = 2200;  // tom do bip leve de rastreio
+const int DURACAO_BIP_MIRA  = 50;    // duração de cada bip de rastreio (ms)
+const int INTERVALO_BIP_MIRA = 350;  // intervalo entre bips de rastreio (ms)
+ 
 int ligando = 0;
-
+ 
 int ultimoAnguloX = 90;
 int ultimoAnguloY = 90;
-
+ 
 bool           gatilho_ativo   = false;
 unsigned long  tempo_gatilho   = 0;
 unsigned long tempo_brilho_gatilho = 0;
-
+ 
 bool           botao_anterior  = HIGH;
 unsigned long  tempo_debounce  = 0;
-
+ 
 bool           botao_anterior_ligar  = HIGH;
 unsigned long  tempo_debounce_ligar = 0;
-
+ 
 bool ligar = false;  // Estado do sistema (ligado/desligado)
-
+ 
+bool          mirando_atual         = false; // estado mais recente vindo do Python
+unsigned long tempo_ultimo_bip_mira = 0;
+ 
 int           anguloAlvoY     = 90;   // alvo mais recente vindo do Python
 unsigned long ultimoPassoY    = 0;
 const int     PASSO_ANGULO    = 2;    // graus por passo (menor = mais suave)
 const int     INTERVALO_PASSO = 15;   // ms entre passos (maior = mais devagar)
-
+ 
 // Move o servo Y gradualmente em direção a "alvo", alguns graus por vez,
 void moverServoSuave(Servo &servo, int &anguloAtual, int alvo) {
     if (millis() - ultimoPassoY < INTERVALO_PASSO || anguloAtual == alvo) return;
@@ -57,15 +68,15 @@ void moverServoSuave(Servo &servo, int &anguloAtual, int alvo) {
     servo.write(anguloAtual);
     ultimoPassoY = millis();
 }
-
-
+ 
+ 
 void setup() {
     Serial.begin(9600);
-
+ 
     servox.attach(PINO_SERVOX);
     servoy.attach(PINO_SERVOY);
     servo_gatilho.attach(PINO_GATILHO);
-
+ 
     pinMode(PINO_BOTAO, INPUT_PULLUP);  // botão entre pino 7 e GND
     pinMode(PINO_BOTAO_LIGAR, INPUT_PULLUP);  // botão entre pino 8 e GND
     pinMode(LED_LIGADO, OUTPUT);
@@ -74,7 +85,7 @@ void setup() {
     pinMode(LED_ATIRANDO, OUTPUT);
     pinMode(LED_MIRANDO, OUTPUT);
     pinMode(BUZZER, OUTPUT);
-
+ 
     servox.write(90);
     servoy.write(90);
     servo_gatilho.write(ANGULO_REPOUSO);
@@ -85,34 +96,40 @@ void setup() {
     digitalWrite(LED_ATIRANDO,  LOW);
     digitalWrite(LED_MIRANDO,   LOW);
 }
-
+ 
 void loop() {
     // Botão de ligar/desligar (com debounce)
     bool botao_ligar_atual = digitalRead(PINO_BOTAO_LIGAR);
-
+ 
     bool botao_atual = digitalRead(PINO_BOTAO);
-
+ 
     if (botao_ligar_atual == LOW && botao_anterior_ligar == HIGH && (millis() - tempo_debounce_ligar > DEBOUNCE_MS))
     {   
         ligar = !ligar;  // Alterna o estado de ligar/desligar
         ligando = 0; // reseta o estado de inicialização
         Serial.println(ligar ? "Ligado" : "Desligado");
+ 
         if (ligar) {
+            // Bipe de confirmação ao ligar
+            tone(BUZZER, FREQ_BIP_LIGAR, DURACAO_BIP_LIGAR);
+        } else {
+            // Centraliza X e Y ao desligar
             servox.write(90);
             servoy.write(90);
             ultimoAnguloX = 90;
             ultimoAnguloY = 90;
             anguloAlvoY   = 90;
-
+            mirando_atual = false;
         }
+ 
         tempo_debounce_ligar = millis();
     }
-
+ 
     botao_anterior_ligar = botao_ligar_atual;
-
+ 
     if (!ligar) {
         botao_anterior = botao_atual;
-
+ 
         digitalWrite(LED_DESLIGADO, HIGH);
         digitalWrite(LED_LIGADO,    LOW);
         digitalWrite(LED_LIGANDO,   LOW);
@@ -124,11 +141,11 @@ void loop() {
     
     // Sistema ligando
     digitalWrite(LED_DESLIGADO, LOW);
-
+ 
     // LED de inicialização (servo voltando ao centro)
     int anguloAtualX = servox.read();
     int anguloAtualY = servoy.read();
-
+ 
     if ((anguloAtualX != 90 || anguloAtualY != 90) && ligando == 0) {
         digitalWrite(LED_LIGANDO, HIGH);
         digitalWrite(LED_LIGADO,  LOW);
@@ -137,7 +154,7 @@ void loop() {
         digitalWrite(LED_LIGANDO, LOW);
         digitalWrite(LED_LIGADO,  HIGH);
     }
-
+ 
     // Botão de recarga (com debounce)
     
     if (botao_atual == LOW && botao_anterior == HIGH && (millis() - tempo_debounce > DEBOUNCE_MS))
@@ -146,49 +163,61 @@ void loop() {
         tempo_debounce = millis();
     }
     botao_anterior = botao_atual;
-
+ 
     // Retorno automático do gatilho
     if (gatilho_ativo && (millis() - tempo_gatilho >= DURACAO_GATILHO)) {
         servo_gatilho.write(ANGULO_REPOUSO);
         gatilho_ativo = false;
     }
-
-    // LED e buzzer de disparo
-    if (gatilho_ativo || (millis() - tempo_brilho_gatilho < DURACAO_BRILHO_GATILHO)) {
+ 
+    // LED e buzzer de disparo / bip leve de rastreio
+    bool atirando_agora = gatilho_ativo || (millis() - tempo_brilho_gatilho < DURACAO_BRILHO_GATILHO);
+ 
+    if (atirando_agora) {
         digitalWrite(LED_ATIRANDO, HIGH);
-        tone(BUZZER, 1200);  // beep 1.2kHz enquanto atira
+        tone(BUZZER, 1200);  // beep 1.2kHz enquanto atira (tem prioridade sobre o bip de mira)
     } else {
         digitalWrite(LED_ATIRANDO, LOW);
-        noTone(BUZZER);
+ 
+        if (mirando_atual) {
+            // Bip leve e intermitente enquanto está seguindo o alvo
+            if (millis() - tempo_ultimo_bip_mira >= INTERVALO_BIP_MIRA) {
+                tone(BUZZER, FREQ_BIP_MIRA, DURACAO_BIP_MIRA);
+                tempo_ultimo_bip_mira = millis();
+            }
+        } else {
+            noTone(BUZZER);
+        }
     }
-
+ 
     // Leitura serial (Python → Arduino)
     if (Serial.available() > 0) {
         String entrada = Serial.readStringUntil('\n');
-
+ 
         // Formato: "X,Y,GATILHO,MIRANDO\n"
         int virgula1 = entrada.indexOf(',');
         int virgula2 = entrada.indexOf(',', virgula1 + 1);
         int virgula3 = entrada.indexOf(',', virgula2 + 1);
-
+ 
         // Ignora mensagens incompletas ou fora do formato esperado
         if (virgula1 == -1 || virgula2 == -1 || virgula3 == -1) {
             return;
         }
-
+ 
         int novoAnguloX = entrada.substring(0, virgula1).toInt();
         int novoAnguloY = entrada.substring(virgula1 + 1, virgula2).toInt();
         int gatilho     = entrada.substring(virgula2 + 1, virgula3).toInt();
         int mirando     = entrada.substring(virgula3 + 1).toInt();
-
+ 
         novoAnguloX = constrain(novoAnguloX, 0, 180);
         novoAnguloY = constrain(novoAnguloY, 0, 180);
         gatilho     = constrain(gatilho, 0, 1);
         mirando     = constrain(mirando, 0, 1);
-
+ 
         // Brilho se tiver mirando
         digitalWrite(LED_MIRANDO, mirando ? HIGH : LOW);
-
+        mirando_atual = mirando;
+ 
                 // Move o servo X (continua instantâneo)
         if (abs(novoAnguloX - ultimoAnguloX) >= ZONA_MORTA)
         {
@@ -202,14 +231,14 @@ void loop() {
         {
             anguloAlvoY = novoAnguloY;
         }
-
-
+ 
+ 
         // Aciona o gatilho
-        // O acionamento físico automático está desativado para testes.
         if (gatilho == 1 && !gatilho_ativo) {
             gatilho_ativo = true;
             tempo_gatilho = millis();
             tempo_brilho_gatilho = millis();
+            servo_gatilho.write(ANGULO_ACIONADO);
             Serial.println("MIRA_CONFIRMADA");
         }
     }
