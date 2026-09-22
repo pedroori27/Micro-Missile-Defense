@@ -5,6 +5,7 @@ from ultralytics import YOLO
 import serial.tools.list_ports
 import time
 import subprocess
+import platform
 
 # CONFIGURAÇÕES
 
@@ -23,9 +24,14 @@ FOV_HORIZONTAL = 130
 # FOV vertical que tem a câmera
 FOV_VERTICAL = 62
 
-# Câmera USB encontrada no Linux
-INDICE_CAMERA = 2
+# Índice da câmera (funciona tanto no Windows quanto no Linux)
+INDICE_CAMERA = 3
+
+# Caminho do dispositivo no Linux (usado só para ajustar a frequência da rede elétrica via v4l2-ctl)
 DISPOSITIVO_CAMERA = "/dev/video2"
+
+# Detecta o sistema operacional uma única vez
+SISTEMA_OPERACIONAL = platform.system()  # "Windows", "Linux", "Darwin"
 
 # Atirar com o servo
 TOLERANCIA_MIRA = 60    # pixels do centro para considerar "na mira"
@@ -39,11 +45,11 @@ ALPHA_SUAVIZACAO = 0.3
 
 # Velocidade/sensibilidade do rastreamento
 # Menor = movimento mais suave; maior = movimento mais rápido
-GANHO_RASTREIO_X = 0.05
+GANHO_RASTREIO_X = 0.12
 GANHO_RASTREIO_Y = 0.05
 
 # Máximo que cada servo pode corrigir por atualização
-PASSO_MAXIMO_X = 1.0
+PASSO_MAXIMO_X = 3.0
 PASSO_MAXIMO_Y = 1.0
 
 # Limites para evitar que os servos cheguem ao fim mecânico
@@ -73,31 +79,39 @@ CLASSES_DISPONIVEIS = {
 def iniciar_camera():
 
     print("Procurando câmera...")
+    print(f"Sistema operacional: {SISTEMA_OPERACIONAL}")
 
-    # Ajusta a frequência da rede elétrica para 60 Hz
-    # Isso ajuda a evitar cintilação com algumas iluminações artificiais
-    try:
-        subprocess.run(
-            [
-                "v4l2-ctl",
-                f"--device={DISPOSITIVO_CAMERA}",
-                "--set-ctrl=power_line_frequency=2"
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False
-        )
-    except FileNotFoundError:
-        # Caso v4l2-ctl não esteja instalado, o programa continua normalmente
-        pass
+    # Ajusta a frequência da rede elétrica para 60 Hz (evita cintilação)
+    # Isso só existe no Linux/V4L2, então no Windows essa etapa é pulada
+    if SISTEMA_OPERACIONAL == "Linux":
+        try:
+            subprocess.run(
+                [
+                    "v4l2-ctl",
+                    f"--device={DISPOSITIVO_CAMERA}",
+                    "--set-ctrl=power_line_frequency=2"
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False
+            )
+        except FileNotFoundError:
+            # Caso v4l2-ctl não esteja instalado, o programa continua normalmente
+            pass
 
     print(f"Tentando câmera {INDICE_CAMERA}...")
 
-    # Linux / V4L2
-    camera = cv2.VideoCapture(
-        INDICE_CAMERA,
-        cv2.CAP_V4L2
-    )
+    # Escolhe o backend certo para cada sistema operacional.
+    # DSHOW é o mais confiável no Windows para aplicar resolução/FPS/MJPG;
+    # V4L2 é o equivalente no Linux; CAP_ANY serve de fallback genérico.
+    if SISTEMA_OPERACIONAL == "Windows":
+        backend = cv2.CAP_DSHOW
+    elif SISTEMA_OPERACIONAL == "Linux":
+        backend = cv2.CAP_V4L2
+    else:
+        backend = cv2.CAP_ANY
+
+    camera = cv2.VideoCapture(INDICE_CAMERA, backend)
 
     if not camera.isOpened():
         camera.release()
@@ -159,7 +173,8 @@ def iniciar_camera():
 
     print("Câmera encontrada!")
     print(f"Índice: {INDICE_CAMERA}")
-    print(f"Dispositivo: {DISPOSITIVO_CAMERA}")
+    if SISTEMA_OPERACIONAL == "Linux":
+        print(f"Dispositivo: {DISPOSITIVO_CAMERA}")
     print(f"Resolução: {largura}x{altura}")
     print(f"FPS: {fps:.0f}")
     print(f"Formato: {formato}")
@@ -740,6 +755,8 @@ def main():
                     progresso         = 0.0
 
                 # ── DISPARO — checa cooldown e recarga ─────────────
+                disparar_agora = False
+
                 pode_disparar = (
                     na_mira and
                     progresso >= 1.0 and
@@ -747,15 +764,32 @@ def main():
                     not cooldown_ativo and
                     not esperando_recarga
                 )
+                
+                disparar_agora = False
 
-                # Mantém a lógica visual de mira para testes.
-                # O acionamento físico automático permanece desativado.
+                pode_disparar = (
+                    na_mira and
+                    progresso >= 1.0 and
+                    not gatilho_acionado and
+                    not cooldown_ativo and
+                    not esperando_recarga
+                )
+                
                 if pode_disparar:
                     gatilho_acionado = True
-                    print("Alvo permaneceu na mira pelo tempo configurado.")
+                    disparar_agora = True
+                    usos_gatilho += 1
+                    tempo_ultimo_gatilho = time.time()
+
+                    if usos_gatilho >= MAX_USOS_GATILHO:
+                        esperando_recarga = True
+
+                    print(f"Disparo! ({usos_gatilho}/{MAX_USOS_GATILHO})")
+
+                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, disparar_agora, na_mira)
                 # ───────────────────────────────────────────────────
 
-                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, False, na_mira)
+                enviar_servo(arduino, angulo_servo_x, angulo_servo_y, gatilho_acionado, na_mira)
                 desenhar_deteccoes(frame, deteccoes, distancia_focal_x, distancia_focal_y)
                 desenhar_mira(frame, progresso, na_mira, gatilho_acionado)
 
