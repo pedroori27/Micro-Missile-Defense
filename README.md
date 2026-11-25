@@ -1,6 +1,6 @@
 # Micro Missile Defense 
 
-Sistema de rastreamento automático de pessoas em tempo real, que usa visão computacional (YOLOv8) para detectar uma pessoa na imagem da câmera e movimenta dois servos motores (eixos X e Y) via Arduino, mantendo o alvo centralizado no campo de visão.
+Sistema de rastreamento automático de pessoas em tempo real, que usa visão computacional (YOLOv11) para detectar uma pessoa na imagem da câmera e movimenta dois servos motores (eixos X e Y) via Arduino, mantendo o alvo centralizado no campo de visão.
 
 ## Como funciona
 
@@ -24,8 +24,9 @@ Sistema de rastreamento automático de pessoas em tempo real, que usa visão com
 
 | Componente | Pino no Arduino |
 |---|---|
-| Servo X (pan) | 9 |
-| Servo Y (tilt) | 10 |
+| Servo X (horizontal) | 9 |
+| Servo Y (vertical) | 10 |
+| Servo Gatilho (gatilho) | 11 |
 
 > 💡 Se os dois servos consumirem mais corrente do que o pino 5V do Arduino aguenta, use uma fonte externa de 5V para os servos (com o GND compartilhado com o Arduino).
 
@@ -68,7 +69,8 @@ Antes de executar, ajuste as constantes no início do script conforme o seu setu
 |---|---|---|
 | `CONFIANCA_MINIMA` | Confiança mínima para considerar uma detecção válida (0 a 1) | `0.70` |
 | `ANGULO_CENTRO_SERVO` | Ângulo central dos servos (posição neutra) | `90` |
-| `FOV_HORIZONTAL` | Campo de visão horizontal da câmera, em graus | `90` |
+| `FOV_HORIZONTAL` | Campo de visão horizontal da câmera, em graus | `130` |
+| `FOV_VERTICAL` | Campo de visão vertical da câmera, em graus | `62` |
 | Porta serial (dentro de `iniciar_arduino`) | Porta de conexão com o Arduino | `"COM5"` |
 | `ZONA_MORTA` *(no firmware, `main.cpp`)* | Diferença mínima (em graus) para o servo se mover — evita jitter | `2` |
 
